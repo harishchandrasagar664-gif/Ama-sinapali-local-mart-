@@ -14,7 +14,12 @@ data class UserEntity(
     val role: UserRole,
     val shopId: Long? = null,
     val isVerified: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val district: String = "Nuapada",
+    val block: String = "Sinapali",
+    val gp: String = "Sinapali",
+    val village: String = "Sinapali",
+    val deliveryAddress: String = "Near Panchayat Samiti Office, Word No 4, Sinapali"
 )
 
 @Entity(tableName = "shops")
@@ -115,11 +120,15 @@ data class AddressEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val userId: Long,
-    val title: String,
+    val title: String = "Home",
     val fullAddress: String,
     val landmark: String = "",
     val phone: String,
-    val isDefault: Boolean = false
+    val isDefault: Boolean = false,
+    val district: String = "Nuapada",
+    val block: String = "Sinapali",
+    val gp: String = "Sinapali",
+    val village: String = "Sinapali"
 )
 
 @Entity(tableName = "banners")

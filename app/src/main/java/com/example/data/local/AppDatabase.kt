@@ -25,7 +25,7 @@ import com.example.data.local.entities.*
         ComplaintEntity::class,
         PaymentRecordEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

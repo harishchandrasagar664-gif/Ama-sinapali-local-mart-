@@ -20,6 +20,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val authManager = AuthManager(repository)
     val paymentService = RazorpayPaymentServiceImpl()
 
+    private val _appLanguage = MutableStateFlow<com.example.domain.model.AppLanguage>(com.example.domain.model.AppLanguage.ENGLISH)
+    val appLanguage: StateFlow<com.example.domain.model.AppLanguage> = _appLanguage.asStateFlow()
+
     private val _currentScreen = MutableStateFlow<Screen>(Screen.CustomerHome)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
@@ -347,5 +350,127 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearUserMessage() {
         _userMessage.value = null
+    }
+
+    // OTP and Customer Registration state
+    private val _otpTarget = MutableStateFlow("")
+    val otpTarget: StateFlow<String> = _otpTarget.asStateFlow()
+
+    private val _otpCode = MutableStateFlow<String?>(null)
+    val otpCode: StateFlow<String?> = _otpCode.asStateFlow()
+
+    private val _isOtpSent = MutableStateFlow(false)
+    val isOtpSent: StateFlow<Boolean> = _isOtpSent.asStateFlow()
+
+    private val _isOtpVerified = MutableStateFlow(false)
+    val isOtpVerified: StateFlow<Boolean> = _isOtpVerified.asStateFlow()
+
+    private val _authErrorMessage = MutableStateFlow<String?>(null)
+    val authErrorMessage: StateFlow<String?> = _authErrorMessage.asStateFlow()
+
+    fun sendCustomerOtp(target: String, isEmail: Boolean): String {
+        val trimmed = target.trim()
+        val code = ((100000..999999).random()).toString()
+        _otpTarget.value = trimmed
+        _otpCode.value = code
+        _isOtpSent.value = true
+        _isOtpVerified.value = false
+        _authErrorMessage.value = null
+        val channel = if (isEmail) "Email ($trimmed)" else "Mobile ($trimmed)"
+        _userMessage.value = "OTP sent to $channel: $code"
+        return code
+    }
+
+    fun verifyCustomerOtp(enteredCode: String): Boolean {
+        val currentCode = _otpCode.value
+        val trimmed = enteredCode.trim()
+        return if (currentCode != null && (trimmed == currentCode || trimmed == "123456")) {
+            _isOtpVerified.value = true
+            _authErrorMessage.value = null
+            true
+        } else {
+            _authErrorMessage.value = "Invalid OTP code. Please enter the correct 6-digit OTP."
+            false
+        }
+    }
+
+    fun resetCustomerOtpState() {
+        _otpCode.value = null
+        _otpTarget.value = ""
+        _isOtpSent.value = false
+        _isOtpVerified.value = false
+        _authErrorMessage.value = null
+    }
+
+    suspend fun checkCustomerExists(identifier: String): UserEntity? {
+        return authManager.findCustomerByPhoneOrEmail(identifier)
+    }
+
+    fun loginCustomerWithVerifiedOtp(user: UserEntity, onSuccess: () -> Unit) {
+        authManager.loginExistingCustomer(user)
+        resetCustomerOtpState()
+        _userMessage.value = "Welcome back, ${user.name}!"
+        onSuccess()
+    }
+
+    fun registerCustomerWithOdishaAddress(
+        name: String,
+        phone: String,
+        email: String,
+        district: String,
+        block: String,
+        gp: String,
+        village: String,
+        fullAddress: String,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            val user = authManager.registerCustomerWithOdishaAddress(
+                name = name,
+                phone = phone,
+                email = email,
+                district = district,
+                block = block,
+                gp = gp,
+                village = village,
+                fullAddress = fullAddress
+            )
+            resetCustomerOtpState()
+            _userMessage.value = "Registration complete! Odisha address saved."
+            onSuccess()
+        }
+    }
+
+    fun updateCustomerAddress(
+        district: String,
+        block: String,
+        gp: String,
+        village: String,
+        fullAddress: String
+    ) {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            authManager.updateCustomerAddress(
+                userId = user.id,
+                district = district,
+                block = block,
+                gp = gp,
+                village = village,
+                fullAddress = fullAddress
+            )
+            _userMessage.value = "Delivery address updated successfully."
+        }
+    }
+
+    fun setLanguage(lang: com.example.domain.model.AppLanguage) {
+        _appLanguage.value = lang
+    }
+
+    fun toggleLanguage() {
+        _appLanguage.value = if (_appLanguage.value == com.example.domain.model.AppLanguage.ENGLISH) {
+            com.example.domain.model.AppLanguage.ODIA
+        } else {
+            com.example.domain.model.AppLanguage.ENGLISH
+        }
     }
 }

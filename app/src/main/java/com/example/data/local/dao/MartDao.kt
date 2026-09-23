@@ -14,6 +14,12 @@ interface MartDao {
     @Query("SELECT * FROM users WHERE phone = :phone LIMIT 1")
     suspend fun getUserByPhone(phone: String): UserEntity?
 
+    @Query("SELECT * FROM users WHERE email = :email LIMIT 1")
+    suspend fun getUserByEmail(email: String): UserEntity?
+
+    @Query("SELECT * FROM users WHERE phone = :identifier OR email = :identifier LIMIT 1")
+    suspend fun getUserByPhoneOrEmail(identifier: String): UserEntity?
+
     @Query("SELECT * FROM users WHERE id = :id")
     suspend fun getUserById(id: Long): UserEntity?
 
@@ -164,8 +170,14 @@ interface MartDao {
     @Query("SELECT * FROM addresses WHERE userId = :userId")
     fun getAddressesByCustomer(userId: Long): Flow<List<AddressEntity>>
 
+    @Query("SELECT * FROM addresses WHERE userId = :userId AND isDefault = 1 LIMIT 1")
+    suspend fun getDefaultAddressForUser(userId: Long): AddressEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAddress(address: AddressEntity): Long
+
+    @Update
+    suspend fun updateAddress(address: AddressEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAddresses(addresses: List<AddressEntity>)

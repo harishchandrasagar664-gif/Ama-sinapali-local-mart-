@@ -62,6 +62,10 @@ class MainActivity : ComponentActivity() {
                             is Screen.Splash -> SplashScreen {
                                 viewModel.navigateTo(Screen.CustomerHome)
                             }
+                            is Screen.CustomerAuth -> CustomerAuthScreen(
+                                viewModel = viewModel,
+                                onSuccess = { viewModel.navigateTo(Screen.CustomerHome) }
+                            )
                             is Screen.CustomerHome -> CustomerHomeScreen(
                                 viewModel = viewModel,
                                 onRoleSwitchClick = { showPortalSwitcher = true }
@@ -78,6 +82,11 @@ class MainActivity : ComponentActivity() {
                                 onRoleSwitchClick = { showPortalSwitcher = true }
                             )
                             is Screen.CustomerHelp -> CustomerHelpScreen(viewModel)
+                            is Screen.PrivacyPolicy -> PrivacyPolicyScreen(viewModel)
+                            is Screen.ContactUs -> ContactUsScreen(viewModel)
+                            is Screen.AboutUs -> AboutUsScreen(viewModel)
+                            is Screen.TermsConditions -> TermsConditionsScreen(viewModel)
+                            is Screen.ReturnsRefunds -> ReturnsRefundsScreen(viewModel)
 
                             // Shop Owner Screens
                             is Screen.ShopOwnerDashboard, is Screen.ShopOrderManagement -> ShopOwnerDashboardScreen(

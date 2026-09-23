@@ -17,10 +17,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.model.AppLanguage
 import com.example.domain.model.DeliveryType
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.PaymentMethod
 import com.example.ui.components.StatusBadge
+import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -30,6 +32,8 @@ fun CartScreen(viewModel: MainViewModel) {
     val items by viewModel.detailedCartItems.collectAsState()
     val appliedCoupon by viewModel.appliedCoupon.collectAsState()
     val couponError by viewModel.couponError.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
     var couponInput by remember { mutableStateOf("") }
 
     val subtotal = items.sumOf { it.itemTotal }
@@ -39,10 +43,10 @@ fun CartScreen(viewModel: MainViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Your Cart 🛒") },
+                title = { Text(s.yourCartTitle) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -58,7 +62,7 @@ fun CartScreen(viewModel: MainViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
-                            Text("Total: ₹${total.toInt()}", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = LocalTealPrimary)
+                            Text("${s.toPay}: ₹${total.toInt()}", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = LocalTealPrimary)
                             Text("Incl. ₹25 town delivery", fontSize = 11.sp, color = LocalTextSecondary)
                         }
                         Button(
@@ -66,7 +70,7 @@ fun CartScreen(viewModel: MainViewModel) {
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
                         ) {
-                            Text("Proceed to Checkout", fontWeight = FontWeight.Bold)
+                            Text(s.proceedToCheckout, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
@@ -85,11 +89,11 @@ fun CartScreen(viewModel: MainViewModel) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.ShoppingBasket, contentDescription = null, modifier = Modifier.size(64.dp), tint = LocalTextMuted)
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Your cart is empty", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Add items from Sinapali shops to order!", color = LocalTextSecondary, fontSize = 13.sp)
+                    Text(s.cartEmpty, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(s.cartEmptyDesc, color = LocalTextSecondary, fontSize = 13.sp)
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
-                        Text("Explore Shops")
+                        Text(s.exploreShopsBtn)
                     }
                 }
             }
@@ -112,7 +116,7 @@ fun CartScreen(viewModel: MainViewModel) {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(item.productName, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("From: ${item.shopName}", fontSize = 11.sp, color = LocalTextSecondary)
+                                Text("${s.fromShop}: ${item.shopName}", fontSize = 11.sp, color = LocalTextSecondary)
                                 Text("₹${item.effectivePrice.toInt()} each", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = LocalTealPrimary)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -138,13 +142,13 @@ fun CartScreen(viewModel: MainViewModel) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Apply Coupon Code", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text(s.applyCoupon, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 OutlinedTextField(
                                     value = couponInput,
                                     onValueChange = { couponInput = it },
-                                    placeholder = { Text("e.g. SINAPALI10") },
+                                    placeholder = { Text(s.couponCodePlaceholder) },
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(8.dp),
                                     singleLine = true
@@ -154,7 +158,7 @@ fun CartScreen(viewModel: MainViewModel) {
                                     onClick = { viewModel.applyCoupon(couponInput) },
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text("Apply")
+                                    Text(s.applyBtn)
                                 }
                             }
                             if (appliedCoupon != null) {
@@ -171,24 +175,24 @@ fun CartScreen(viewModel: MainViewModel) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Bill Details", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(s.billSummary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Item Total", fontSize = 13.sp)
+                                Text(s.itemTotal, fontSize = 13.sp)
                                 Text("₹${subtotal.toInt()}", fontSize = 13.sp)
                             }
                             if (discount > 0) {
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Coupon Discount", fontSize = 13.sp, color = LocalSuccess)
+                                    Text(s.couponDiscount, fontSize = 13.sp, color = LocalSuccess)
                                     Text("-₹${discount.toInt()}", fontSize = 13.sp, color = LocalSuccess, fontWeight = FontWeight.Bold)
                                 }
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Delivery Fee", fontSize = 13.sp)
+                                Text(s.deliveryFeeText, fontSize = 13.sp)
                                 Text("₹25", fontSize = 13.sp)
                             }
                             Divider()
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("To Pay", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text(s.toPay, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                 Text("₹${total.toInt()}", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = LocalTealPrimary)
                             }
                         }
@@ -202,17 +206,28 @@ fun CartScreen(viewModel: MainViewModel) {
 @Composable
 fun CheckoutScreen(viewModel: MainViewModel) {
     val user by viewModel.currentUser.collectAsState()
-    var address by remember { mutableStateOf("Near Panchayat Samiti Office, Word No 4, Sinapali") }
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
+    val savedFullAddress = remember(user) {
+        val baseAddr = user?.deliveryAddress?.takeIf { it.isNotBlank() } ?: "Near Panchayat Samiti Office, Word No 4, Sinapali"
+        val village = user?.village?.takeIf { it.isNotBlank() } ?: "Sinapali"
+        val gp = user?.gp?.takeIf { it.isNotBlank() } ?: "Sinapali"
+        val block = user?.block?.takeIf { it.isNotBlank() } ?: "Sinapali"
+        val dist = user?.district?.takeIf { it.isNotBlank() } ?: "Nuapada"
+        "$baseAddr, Village: $village, GP: $gp, Block: $block, Dist: $dist"
+    }
+    var address by remember(savedFullAddress) { mutableStateOf(savedFullAddress) }
     var selectedDeliveryType by remember { mutableStateOf(DeliveryType.HOME_DELIVERY) }
     var selectedPaymentMethod by remember { mutableStateOf(PaymentMethod.CASH_ON_DELIVERY) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Checkout") },
+                title = { Text(s.checkoutTitle) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.Cart) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -226,54 +241,84 @@ fun CheckoutScreen(viewModel: MainViewModel) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Delivery Address (Sinapali)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(s.deliveryAddressTitle, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Surface(
+                            color = LocalTealPrimary.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                s.savedAddressBadge,
+                                color = LocalTealPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (user != null) {
+                        Text(
+                            "${s.deliverTo} ${user?.name} (${user?.phone})",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
+                        )
+                        Text(
+                            "📍 ${s.villageLabel}: ${user?.village}, ${s.gpLabel}: ${user?.gp}, ${s.blockLabel}: ${user?.block}, ${s.districtLabel}: ${user?.district}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = LocalTealDark
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
                         value = address,
                         onValueChange = { address = it },
                         modifier = Modifier.fillMaxWidth(),
-                        maxLines = 3
+                        maxLines = 3,
+                        label = { Text(s.fullAddressLabel) }
                     )
                 }
             }
 
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Delivery Type", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(s.deliveryTypeTitle, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(
                             selected = selectedDeliveryType == DeliveryType.HOME_DELIVERY,
                             onClick = { selectedDeliveryType = DeliveryType.HOME_DELIVERY }
                         )
-                        Text("Doorstep Home Delivery (₹25)")
+                        Text("${s.homeDelivery} (₹25)")
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(
                             selected = selectedDeliveryType == DeliveryType.SELF_PICKUP,
                             onClick = { selectedDeliveryType = DeliveryType.SELF_PICKUP }
                         )
-                        Text("Self Store Pickup (Free)")
+                        Text("${s.storePickup} (₹0)")
                     }
                 }
             }
 
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Payment Method", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(s.paymentMethodTitle, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(
-                            selected = selectedPaymentMethod == PaymentMethod.CASH_ON_DELIVERY,
+                            selected = true,
                             onClick = { selectedPaymentMethod = PaymentMethod.CASH_ON_DELIVERY }
                         )
-                        Text("Cash on Delivery (Pay to Admin upon delivery)")
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = selectedPaymentMethod == PaymentMethod.RAZORPAY,
-                            onClick = { selectedPaymentMethod = PaymentMethod.RAZORPAY }
-                        )
-                        Text("Online / UPI (Razorpay Instant Pay)")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Column {
+                            Text(s.codMethod, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("Pay cash to delivery person upon arrival in Sinapali", fontSize = 12.sp, color = LocalTextSecondary)
+                        }
                     }
                 }
             }
@@ -294,7 +339,7 @@ fun CheckoutScreen(viewModel: MainViewModel) {
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
             ) {
-                Text("Confirm & Place Order", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(s.placeOrderCod, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
         }
     }
@@ -303,15 +348,18 @@ fun CheckoutScreen(viewModel: MainViewModel) {
 @Composable
 fun OrderTrackingScreen(orderId: Long, viewModel: MainViewModel) {
     val orders by viewModel.allOrders.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
     val order = orders.find { it.id == orderId }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Order #${order?.orderNumber ?: ""}") },
+                title = { Text("${s.orderNumber}${order?.orderNumber ?: ""}") },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.CustomerOrders) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -336,14 +384,14 @@ fun OrderTrackingScreen(orderId: Long, viewModel: MainViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Current Status:", fontWeight = FontWeight.Medium)
-                            StatusBadge(order.status)
+                            Text("Status:", fontWeight = FontWeight.Medium)
+                            StatusBadge(order.status, language = appLanguage)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Final Amount: ₹${order.finalAmount.toInt()}", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = LocalTealDark)
+                        Text("${s.toPay}: ₹${order.finalAmount.toInt()}", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = LocalTealDark)
                         Text("Payment: ${order.paymentMethod.name.replace('_', ' ')} (${order.paymentStatus.name})", fontSize = 12.sp)
-                        Text("Delivered By: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Address: ${order.deliveryAddress}", fontSize = 12.sp)
+                        Text("${s.deliveredBy}: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${s.deliveryAddressTitle}: ${order.deliveryAddress}", fontSize = 12.sp)
                     }
                 }
 
@@ -351,10 +399,10 @@ fun OrderTrackingScreen(orderId: Long, viewModel: MainViewModel) {
                 Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Live Delivery Timeline", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        TimelineItem(title = "Order Placed", active = true, icon = Icons.Default.CheckCircle)
-                        TimelineItem(title = "Shop Preparing Order", active = order.status != OrderStatus.PLACED, icon = Icons.Default.Store)
-                        TimelineItem(title = "Out for Delivery (Admin)", active = order.status == OrderStatus.OUT_FOR_DELIVERY || order.status == OrderStatus.DELIVERED, icon = Icons.Default.TwoWheeler)
-                        TimelineItem(title = "Delivered & Handed Over", active = order.status == OrderStatus.DELIVERED, icon = Icons.Default.DoneAll)
+                        TimelineItem(title = s.orderStatusPlaced, active = true, icon = Icons.Default.CheckCircle)
+                        TimelineItem(title = s.orderStatusPreparing, active = order.status != OrderStatus.PLACED, icon = Icons.Default.Store)
+                        TimelineItem(title = s.orderStatusOutForDelivery, active = order.status == OrderStatus.OUT_FOR_DELIVERY || order.status == OrderStatus.DELIVERED, icon = Icons.Default.TwoWheeler)
+                        TimelineItem(title = s.orderStatusDelivered, active = order.status == OrderStatus.DELIVERED, icon = Icons.Default.DoneAll)
                     }
                 }
 
@@ -365,7 +413,7 @@ fun OrderTrackingScreen(orderId: Long, viewModel: MainViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Back to Shopping")
+                    Text(s.exploreShopsBtn)
                 }
             }
         }

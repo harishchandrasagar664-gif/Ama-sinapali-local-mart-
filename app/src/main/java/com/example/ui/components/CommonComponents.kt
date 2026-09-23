@@ -22,16 +22,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.local.entities.ProductEntity
+import com.example.domain.model.AppLanguage
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.UserRole
+import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 
 @Composable
 fun OdiaGreetingHeader(
     currentRole: UserRole,
     onRoleSwitchClick: () -> Unit,
-    userName: String = "User"
+    userName: String = "User",
+    language: AppLanguage = AppLanguage.ENGLISH,
+    onLanguageToggle: (() -> Unit)? = null
 ) {
+    val s = AppStrings.get(language)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -49,41 +54,112 @@ fun OdiaGreetingHeader(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "ନମସ୍କାର ସିନାପାଲି! 🙏",
+                    text = s.odiaGreeting,
                     color = Color.White.copy(alpha = 0.9f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "Ama Sinapali Local Mart",
+                    text = s.appName,
                     color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "Logged as: $userName (${currentRole.name.replace('_', ' ')})",
+                    text = "${s.loggedAs}: $userName (${currentRole.name.replace('_', ' ')})",
                     color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 12.sp
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            FilledTonalButton(
-                onClick = onRoleSwitchClick,
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = LocalAmberSecondary,
-                    contentColor = Color.Black
-                ),
-                shape = RoundedCornerShape(12.dp)
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Portal", modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Portal", fontWeight = FontWeight.Bold)
+                if (onLanguageToggle != null) {
+                    LanguageToggleChip(
+                        currentLanguage = language,
+                        onToggle = onLanguageToggle
+                    )
+                }
+                FilledTonalButton(
+                    onClick = onRoleSwitchClick,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = LocalAmberSecondary,
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Portal", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(s.portalBtn, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
             }
         }
     }
 }
 
 @Composable
-fun StatusBadge(status: OrderStatus) {
+fun LanguageToggleChip(
+    currentLanguage: AppLanguage,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(20.dp),
+        color = Color.White.copy(alpha = 0.2f),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                Icons.Default.Translate,
+                contentDescription = "Language Switcher",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp)
+            )
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (currentLanguage == AppLanguage.ENGLISH) LocalAmberSecondary else Color.Transparent
+            ) {
+                Text(
+                    "EN",
+                    color = if (currentLanguage == AppLanguage.ENGLISH) Color.Black else Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (currentLanguage == AppLanguage.ODIA) LocalAmberSecondary else Color.Transparent
+            ) {
+                Text(
+                    "ଓଡ଼ିଆ",
+                    color = if (currentLanguage == AppLanguage.ODIA) Color.Black else Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusBadge(
+    status: OrderStatus,
+    language: AppLanguage = AppLanguage.ENGLISH
+) {
+    val s = AppStrings.get(language)
     val (bg, fg) = when (status) {
         OrderStatus.PLACED -> Pair(Color(0xFFE3F2FD), Color(0xFF1976D2))
         OrderStatus.ACCEPTED, OrderStatus.PREPARING -> Pair(Color(0xFFFFF3E0), Color(0xFFE65100))
@@ -98,7 +174,7 @@ fun StatusBadge(status: OrderStatus) {
         modifier = Modifier.padding(vertical = 4.dp)
     ) {
         Text(
-            text = status.name.replace('_', ' '),
+            text = s.getStatusText(status),
             color = fg,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
@@ -113,8 +189,10 @@ fun ProductCard(
     onProductClick: () -> Unit,
     isWishlisted: Boolean,
     onAddToCart: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: AppLanguage = AppLanguage.ENGLISH
 ) {
+    val s = AppStrings.get(language)
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -137,6 +215,23 @@ fun ProductCard(
                     modifier = Modifier.size(48.dp),
                     tint = LocalTealPrimary.copy(alpha = 0.5f)
                 )
+                if (product.stock <= 0) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                    ) {
+                        Text(
+                            text = s.outOfStock,
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
@@ -176,13 +271,17 @@ fun ProductCard(
                     }
                     IconButton(
                         onClick = onAddToCart,
+                        enabled = product.stock > 0,
                         modifier = Modifier
                             .size(36.dp)
-                            .background(LocalTealPrimary, CircleShape)
+                            .background(
+                                if (product.stock > 0) LocalTealPrimary else Color.LightGray,
+                                CircleShape
+                            )
                     ) {
                         Icon(
                             Icons.Default.Add,
-                            contentDescription = "Add",
+                            contentDescription = s.addToBasket,
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )

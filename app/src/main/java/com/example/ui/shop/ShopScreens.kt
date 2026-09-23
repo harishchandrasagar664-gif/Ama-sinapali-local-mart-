@@ -2,6 +2,21 @@
 
 package com.example.ui.shop
 
+import android.Manifest
+import android.graphics.Bitmap
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.launch
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.CheckCircle
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -165,6 +180,7 @@ fun ShopOwnerDashboardScreen(
 
 @Composable
 fun ShopProductManagementScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val user by viewModel.currentUser.collectAsState()
     val shops by viewModel.allShops.collectAsState()
     val products by viewModel.allProducts.collectAsState()
@@ -175,6 +191,42 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
     var prodName by remember { mutableStateOf("") }
     var prodPrice by remember { mutableStateOf("") }
     var prodCat by remember { mutableStateOf("Groceries & Spices") }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var imageSourceDescription by remember { mutableStateOf<String?>(null) }
+
+    // Photo Picker (Gallery)
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            selectedImageUri = uri
+            capturedBitmap = null
+            imageSourceDescription = "Selected from Gallery"
+        }
+    }
+
+    // Camera Launcher
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            capturedBitmap = bitmap
+            selectedImageUri = null
+            imageSourceDescription = "Captured with Camera"
+        }
+    }
+
+    // Permission Launcher for Camera
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            cameraLauncher.launch()
+        } else {
+            Toast.makeText(context, "Camera permission is required to take product photo", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -226,22 +278,106 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
 
         if (showAddDialog && myShop != null) {
             AlertDialog(
-                onDismissRequest = { showAddDialog = false },
+                onDismissRequest = {
+                    showAddDialog = false
+                    selectedImageUri = null
+                    capturedBitmap = null
+                    imageSourceDescription = null
+                },
                 title = { Text("Add New Product") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = prodName, onValueChange = { prodName = it }, label = { Text("Product Name") })
-                        OutlinedTextField(value = prodPrice, onValueChange = { prodPrice = it }, label = { Text("Price (₹)") })
-                        OutlinedTextField(value = prodCat, onValueChange = { prodCat = it }, label = { Text("Category") })
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = prodName,
+                            onValueChange = { prodName = it },
+                            label = { Text("Product Name") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = prodPrice,
+                            onValueChange = { prodPrice = it },
+                            label = { Text("Price (₹)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = prodCat,
+                            onValueChange = { prodCat = it },
+                            label = { Text("Category") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Text("Product Image", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.CameraAlt, contentDescription = "Camera", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Camera", fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    galleryLauncher.launch(
+                                        androidx.activity.result.PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Gallery", fontSize = 12.sp)
+                            }
+                        }
+
+                        if (capturedBitmap != null) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(110.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Image(
+                                    bitmap = capturedBitmap!!.asImageBitmap(),
+                                    contentDescription = "Captured Product Image",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Photo captured", fontSize = 11.sp, color = LocalSuccess)
+                            }
+                        } else if (selectedImageUri != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Image selected from gallery", fontSize = 11.sp, color = LocalSuccess)
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(onClick = {
                         val price = prodPrice.toDoubleOrNull() ?: 100.0
+                        val finalImageUrl = selectedImageUri?.toString()
+                            ?: (if (capturedBitmap != null) "camera_captured_${System.currentTimeMillis()}" else "hero_local_mart")
                         val newProd = ProductEntity(
                             shopId = myShop.id,
                             name = prodName,
                             category = prodCat,
+                            imageUrl = finalImageUrl,
                             description = "Freshly supplied by ${myShop.name}",
                             price = price,
                             unit = "1 unit",
@@ -249,12 +385,20 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                         )
                         viewModel.addOrUpdateProduct(newProd)
                         showAddDialog = false
+                        selectedImageUri = null
+                        capturedBitmap = null
+                        imageSourceDescription = null
                     }) {
                         Text("Add")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = {
+                        showAddDialog = false
+                        selectedImageUri = null
+                        capturedBitmap = null
+                        imageSourceDescription = null
+                    }) { Text("Cancel") }
                 }
             )
         }

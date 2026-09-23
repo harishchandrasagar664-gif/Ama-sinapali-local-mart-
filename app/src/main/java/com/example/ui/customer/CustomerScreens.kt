@@ -27,8 +27,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entities.ProductEntity
 import com.example.data.local.entities.ShopEntity
+import com.example.domain.model.AppLanguage
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.ProductCard
+import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -63,6 +65,9 @@ fun CustomerHomeScreen(
 ) {
     val user by viewModel.currentUser.collectAsState()
     val currentRole by viewModel.currentRole.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
     val shops by viewModel.activeShops.collectAsState()
     val products by viewModel.activeProducts.collectAsState()
     val categories by viewModel.categories.collectAsState()
@@ -71,10 +76,23 @@ fun CustomerHomeScreen(
     val selectedCat by viewModel.selectedCategory.collectAsState()
     val cartItems by viewModel.cartItems.collectAsState()
 
-    val filteredProducts = remember(products, searchQuery, selectedCat) {
+    val matchingShops = remember(shops, searchQuery) {
+        if (searchQuery.isBlank()) {
+            emptyList()
+        } else {
+            shops.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
+    val filteredProducts = remember(products, searchQuery, selectedCat, matchingShops) {
+        val matchingShopIds = matchingShops.map { it.id }.toSet()
         products.filter { p ->
-            (searchQuery.isBlank() || p.name.contains(searchQuery, ignoreCase = true) || p.category.contains(searchQuery, ignoreCase = true)) &&
-            (selectedCat == "All" || p.category == selectedCat)
+            val matchesSearch = searchQuery.isBlank() ||
+                p.name.contains(searchQuery, ignoreCase = true) ||
+                p.category.contains(searchQuery, ignoreCase = true) ||
+                matchingShopIds.contains(p.shopId)
+            val matchesCategory = selectedCat == "All" || p.category == selectedCat
+            matchesSearch && matchesCategory
         }
     }
 
@@ -83,7 +101,9 @@ fun CustomerHomeScreen(
             OdiaGreetingHeader(
                 currentRole = currentRole,
                 onRoleSwitchClick = onRoleSwitchClick,
-                userName = user?.name ?: "Customer"
+                userName = user?.name ?: "Customer",
+                language = appLanguage,
+                onLanguageToggle = { viewModel.toggleLanguage() }
             )
         },
         bottomBar = {
@@ -91,14 +111,14 @@ fun CustomerHomeScreen(
                 NavigationBarItem(
                     selected = true,
                     onClick = { viewModel.navigateTo(Screen.CustomerHome) },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                    label = { Text("Home") }
+                    icon = { Icon(Icons.Default.Home, contentDescription = s.navHome) },
+                    label = { Text(s.navHome) }
                 )
                 NavigationBarItem(
                     selected = false,
                     onClick = { viewModel.navigateTo(Screen.Categories) },
-                    icon = { Icon(Icons.Default.Category, contentDescription = "Categories") },
-                    label = { Text("Categories") }
+                    icon = { Icon(Icons.Default.Category, contentDescription = s.navCategories) },
+                    label = { Text(s.navCategories) }
                 )
                 NavigationBarItem(
                     selected = false,
@@ -107,22 +127,22 @@ fun CustomerHomeScreen(
                         BadgedBox(badge = {
                             if (cartItems.isNotEmpty()) Badge { Text("${cartItems.sumOf { it.quantity }}") }
                         }) {
-                            Icon(Icons.Default.ShoppingCart, contentDescription = "Cart")
+                            Icon(Icons.Default.ShoppingCart, contentDescription = s.navCart)
                         }
                     },
-                    label = { Text("Cart") }
+                    label = { Text(s.navCart) }
                 )
                 NavigationBarItem(
                     selected = false,
                     onClick = { viewModel.navigateTo(Screen.CustomerOrders) },
-                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Orders") },
-                    label = { Text("Orders") }
+                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = s.navOrders) },
+                    label = { Text(s.navOrders) }
                 )
                 NavigationBarItem(
                     selected = false,
                     onClick = { viewModel.navigateTo(Screen.CustomerProfile) },
-                    icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-                    label = { Text("Profile") }
+                    icon = { Icon(Icons.Default.Person, contentDescription = s.navProfile) },
+                    label = { Text(s.navProfile) }
                 )
             }
         }
@@ -133,13 +153,60 @@ fun CustomerHomeScreen(
                 .padding(padding)
         ) {
             item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { viewModel.navigateTo(Screen.CustomerProfile) }
+                    ) {
+                        Icon(
+                            Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = LocalTealPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${s.deliverTo} ${user?.village ?: "Sinapali"}, ${user?.district ?: "Nuapada"}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            color = LocalTextSecondary
+                        )
+                    }
+                    TextButton(
+                        onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            if (user?.isVerified == true) s.verifiedBadge else s.loginOtp,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            item {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    placeholder = { Text("Search Sinapali stores, vegetables, sweets...") },
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    placeholder = { Text(s.searchPlaceholder) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
@@ -151,6 +218,46 @@ fun CustomerHomeScreen(
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true
                 )
+            }
+
+            if (matchingShops.isNotEmpty()) {
+                item {
+                    Text(
+                        s.matchingShops,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = LocalTealPrimary,
+                        modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 6.dp)
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(matchingShops) { shop ->
+                            Card(
+                                modifier = Modifier
+                                    .width(220.dp)
+                                    .clickable { viewModel.navigateTo(Screen.ShopDetail(shop.id)) },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Store, contentDescription = null, tint = LocalTealDark)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(shop.name, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+                                    }
+                                    Text(shop.category, color = LocalTextSecondary, fontSize = 11.sp, maxLines = 1)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("📍 ${shop.address}", fontSize = 11.sp, color = LocalTextSecondary, maxLines = 1)
+                                    Text(s.viewShopProducts, color = LocalTealPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
 
             // Banners
@@ -192,7 +299,7 @@ fun CustomerHomeScreen(
             // Category Chips
             item {
                 Text(
-                    "Shop by Category",
+                    s.shopByCategory,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp)
@@ -205,7 +312,7 @@ fun CustomerHomeScreen(
                         FilterChip(
                             selected = selectedCat == "All",
                             onClick = { viewModel.setSelectedCategory("All") },
-                            label = { Text("All") }
+                            label = { Text(s.allCategory) }
                         )
                     }
                     items(categories) { cat ->
@@ -221,7 +328,7 @@ fun CustomerHomeScreen(
             // Local Shops
             item {
                 Text(
-                    "Popular Sinapali Shops 🏪",
+                    s.popularShops,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp)
@@ -246,7 +353,7 @@ fun CustomerHomeScreen(
                                 }
                                 Text(shop.category, color = LocalTextSecondary, fontSize = 11.sp, maxLines = 1)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("★ ${shop.rating} • ${shop.estimatedDeliveryMins} mins", color = LocalAmberDark, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                Text("★ ${shop.rating} • ${shop.estimatedDeliveryMins} ${s.mins}", color = LocalAmberDark, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -256,7 +363,7 @@ fun CustomerHomeScreen(
             // Products Grid Title
             item {
                 Text(
-                    "Trending Items Today 🔥",
+                    s.trendingItems,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
@@ -277,7 +384,8 @@ fun CustomerHomeScreen(
                                 product = prod,
                                 onProductClick = { viewModel.navigateTo(Screen.ProductDetail(prod.id)) },
                                 isWishlisted = false,
-                                onAddToCart = { viewModel.addToCart(prod.id, prod.shopId, 1) }
+                                onAddToCart = { viewModel.addToCart(prod.id, prod.shopId, 1) },
+                                language = appLanguage
                             )
                         }
                     }
@@ -293,13 +401,16 @@ fun CustomerHomeScreen(
 @Composable
 fun CategoriesScreen(viewModel: MainViewModel) {
     val categories by viewModel.categories.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("All Categories") },
+                title = { Text(s.allCategoriesTitle) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -343,16 +454,19 @@ fun CategoriesScreen(viewModel: MainViewModel) {
 fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
     val shops by viewModel.allShops.collectAsState()
     val products by viewModel.allProducts.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
     val shop = shops.find { it.id == shopId }
     val shopProducts = products.filter { it.shopId == shopId }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(shop?.name ?: "Shop Details") },
+                title = { Text(shop?.name ?: s.shopDetails) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -377,11 +491,11 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Text("📍 ${shop.address}", fontSize = 12.sp)
                             Text("📞 ${shop.phone} • UPI: ${shop.upiId}", fontSize = 12.sp)
-                            Text("⭐ ${shop.rating} (${shop.reviewCount} reviews) • Delivery in ~${shop.estimatedDeliveryMins}m", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Text("⭐ ${shop.rating} (${shop.reviewCount} reviews) • Delivery in ~${shop.estimatedDeliveryMins}${s.mins}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
                     }
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Products from this shop", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(s.productsFromShop, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
 
                 items(shopProducts) { prod ->
@@ -406,7 +520,7 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
                             ) {
-                                Text("+ Add")
+                                Text("+ ${s.addToBasket}")
                             }
                         }
                     }
@@ -419,15 +533,18 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
 @Composable
 fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
     val products by viewModel.allProducts.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
     val product = products.find { it.id == productId }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(product?.name ?: "Product Details") },
+                title = { Text(product?.name ?: s.productDetails) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -474,7 +591,7 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
                 ) {
                     Icon(Icons.Default.ShoppingCart, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Add to Basket & Go to Cart", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("${s.addToCartBtn} & ${s.navCart}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

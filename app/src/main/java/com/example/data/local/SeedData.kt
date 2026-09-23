@@ -7,9 +7,10 @@ object SeedData {
     val adminUser = UserEntity(
         id = 1,
         name = "Harishchandra Sagar (Admin)",
-        phone = "9876543210",
+        phone = "7894952827",
         email = "harishchandrasagar664@gmail.com",
-        role = UserRole.ADMIN
+        role = UserRole.ADMIN,
+        deliveryAddress = "Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108"
     )
 
     val shopOwners = listOf(

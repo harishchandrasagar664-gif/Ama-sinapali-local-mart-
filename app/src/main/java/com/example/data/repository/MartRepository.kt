@@ -40,6 +40,8 @@ class MartRepository(private val dao: MartDao) {
 
     fun getAllUsers(): Flow<List<UserEntity>> = dao.getAllUsers()
     suspend fun getUserByPhone(phone: String): UserEntity? = dao.getUserByPhone(phone)
+    suspend fun getUserByEmail(email: String): UserEntity? = dao.getUserByEmail(email)
+    suspend fun getUserByPhoneOrEmail(identifier: String): UserEntity? = dao.getUserByPhoneOrEmail(identifier)
     suspend fun getUserById(id: Long): UserEntity? = dao.getUserById(id)
     suspend fun registerUser(user: UserEntity): Long = dao.insertUser(user)
     suspend fun insertUser(user: UserEntity): Long = dao.insertUser(user)
@@ -218,7 +220,9 @@ class MartRepository(private val dao: MartDao) {
     }
 
     fun getAddressesByCustomer(customerId: Long): Flow<List<AddressEntity>> = dao.getAddressesByCustomer(customerId)
+    suspend fun getDefaultAddressForUser(userId: Long): AddressEntity? = dao.getDefaultAddressForUser(userId)
     suspend fun addAddress(address: AddressEntity): Long = dao.insertAddress(address)
+    suspend fun updateAddress(address: AddressEntity) = dao.updateAddress(address)
 
     fun getActiveOffers(): Flow<List<OfferEntity>> = dao.getActiveOffers()
     suspend fun getOfferByCode(code: String): OfferEntity? = dao.getOfferByCode(code)

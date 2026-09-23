@@ -3,6 +3,7 @@ package com.example.service
 import com.example.BuildConfig
 import com.example.data.local.SeedData
 import com.example.data.local.entities.UserEntity
+import com.example.data.local.entities.AddressEntity
 import com.example.data.repository.MartRepository
 import com.example.domain.model.PaymentMethod
 import com.example.domain.model.UserRole
@@ -53,6 +54,125 @@ class AuthManager(private val repository: MartRepository) {
         _currentUser.value = user
         _currentRole.value = UserRole.CUSTOMER
         return user
+    }
+
+    suspend fun findCustomerByPhoneOrEmail(identifier: String): UserEntity? {
+        val trimmed = identifier.trim()
+        val user = repository.getUserByPhoneOrEmail(trimmed)
+        return if (user != null && user.role == UserRole.CUSTOMER) user else null
+    }
+
+    suspend fun registerCustomerWithOdishaAddress(
+        name: String,
+        phone: String,
+        email: String,
+        district: String,
+        block: String,
+        gp: String,
+        village: String,
+        fullAddress: String
+    ): UserEntity {
+        val existing = repository.getUserByPhoneOrEmail(phone.trim().ifBlank { email.trim() })
+        val newUser = if (existing != null) {
+            existing.copy(
+                name = name.ifBlank { existing.name },
+                phone = phone.ifBlank { existing.phone },
+                email = email.ifBlank { existing.email },
+                district = district,
+                block = block,
+                gp = gp,
+                village = village,
+                deliveryAddress = fullAddress,
+                isVerified = true
+            ).also { repository.updateUser(it) }
+        } else {
+            val entity = UserEntity(
+                name = name.ifBlank { "Verified Customer" },
+                phone = phone.trim(),
+                email = email.trim(),
+                role = UserRole.CUSTOMER,
+                isVerified = true,
+                district = district,
+                block = block,
+                gp = gp,
+                village = village,
+                deliveryAddress = fullAddress
+            )
+            val id = repository.insertUser(entity)
+            entity.copy(id = id)
+        }
+
+        // Save default address entity for future orders
+        val addressEntity = AddressEntity(
+            userId = newUser.id,
+            title = "Home",
+            fullAddress = fullAddress,
+            phone = newUser.phone,
+            isDefault = true,
+            district = district,
+            block = block,
+            gp = gp,
+            village = village
+        )
+        repository.addAddress(addressEntity)
+
+        _currentUser.value = newUser
+        _currentRole.value = UserRole.CUSTOMER
+        return newUser
+    }
+
+    fun loginExistingCustomer(user: UserEntity) {
+        _currentUser.value = user
+        _currentRole.value = UserRole.CUSTOMER
+    }
+
+    suspend fun updateCustomerAddress(
+        userId: Long,
+        district: String,
+        block: String,
+        gp: String,
+        village: String,
+        fullAddress: String
+    ) {
+        val user = _currentUser.value ?: return
+        if (user.id == userId) {
+            val updatedUser = user.copy(
+                district = district,
+                block = block,
+                gp = gp,
+                village = village,
+                deliveryAddress = fullAddress
+            )
+            repository.updateUser(updatedUser)
+            _currentUser.value = updatedUser
+
+            val defaultAddr = repository.getDefaultAddressForUser(userId)
+            if (defaultAddr != null) {
+                repository.updateAddress(
+                    defaultAddr.copy(
+                        district = district,
+                        block = block,
+                        gp = gp,
+                        village = village,
+                        fullAddress = fullAddress
+                    )
+                )
+            } else {
+                repository.addAddress(
+                    AddressEntity(
+                        userId = userId,
+                        title = "Home",
+                        fullAddress = fullAddress,
+                        phone = user.phone,
+                        isDefault = true,
+                        district = district,
+                        block = block,
+                        gp = gp,
+                        village = village
+                    )
+                )
+            }
+        }
     }
 
     suspend fun loginAsShopOwner(phone: String): UserEntity {
