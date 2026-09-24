@@ -2,7 +2,7 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:gravity="center"
-        android:height="66dp"
-        android:width="66dp"
+        android:height="76dp"
+        android:width="76dp"
         android:drawable="@drawable/ic_mart_icon"/>
 </layer-list>

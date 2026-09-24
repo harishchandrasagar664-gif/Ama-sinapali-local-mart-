@@ -2,6 +2,7 @@
 
 package com.example.ui.customer
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,9 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.local.entities.ProductEntity
 import com.example.data.local.entities.ShopEntity
 import com.example.domain.model.AppLanguage
@@ -47,13 +51,30 @@ fun SplashScreen(onTimeout: () -> Unit) {
             .background(LocalTealPrimary),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Storefront, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
-            Spacer(modifier = Modifier.height(16.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(24.dp)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = Color.White,
+                shadowElevation = 8.dp,
+                modifier = Modifier.size(130.dp)
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_mart_icon),
+                    contentDescription = "Ama Sinapali Local Mart Logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Fit
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
             Text("ଆମ ସିନାପାଲି ଲୋକାଲ ମାର୍ଟ", color = LocalAmberLight, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text("Ama Sinapali Local Mart", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Town Fast Delivery • Vocal for Local", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+            Text("Town Fast Delivery • Vocal for Local", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
         }
     }
 }
@@ -84,6 +105,13 @@ fun CustomerHomeScreen(
         }
     }
 
+    val allCategoryList = remember(categories, products) {
+        val catNamesFromDb = categories.map { it.name }
+        val catNamesFromProducts = products.map { it.category }
+        val defaultList = com.example.data.local.SeedData.defaultCategoryNames
+        (listOf("All") + (catNamesFromDb + catNamesFromProducts + defaultList).distinct()).distinct().filter { it.isNotBlank() }
+    }
+
     val filteredProducts = remember(products, searchQuery, selectedCat, matchingShops) {
         val matchingShopIds = matchingShops.map { it.id }.toSet()
         products.filter { p ->
@@ -91,7 +119,7 @@ fun CustomerHomeScreen(
                 p.name.contains(searchQuery, ignoreCase = true) ||
                 p.category.contains(searchQuery, ignoreCase = true) ||
                 matchingShopIds.contains(p.shopId)
-            val matchesCategory = selectedCat == "All" || p.category == selectedCat
+            val matchesCategory = selectedCat.equals("All", ignoreCase = true) || p.category.equals(selectedCat, ignoreCase = true)
             matchesSearch && matchesCategory
         }
     }
@@ -296,31 +324,107 @@ fun CustomerHomeScreen(
                 }
             }
 
-            // Category Chips
+            // Category Chips (Horizontally Scrollable)
             item {
-                Text(
-                    s.shopByCategory,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp)
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    item {
-                        FilterChip(
-                            selected = selectedCat == "All",
-                            onClick = { viewModel.setSelectedCategory("All") },
-                            label = { Text(s.allCategory) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Category,
+                            contentDescription = null,
+                            tint = LocalTealPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            s.shopByCategory,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
                         )
                     }
-                    items(categories) { cat ->
-                        FilterChip(
-                            selected = selectedCat == cat.name,
-                            onClick = { viewModel.setSelectedCategory(cat.name) },
-                            label = { Text(cat.name) }
+                    if (!selectedCat.equals("All", ignoreCase = true)) {
+                        TextButton(
+                            onClick = { viewModel.setSelectedCategory("All") },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                "✕ ${s.allCategory}",
+                                fontSize = 12.sp,
+                                color = LocalTealPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "${allCategoryList.size - 1} ${if (s.isOdia) "ବର୍ଗ" else "Categories"}",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
                         )
+                    }
+                }
+
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(allCategoryList) { catName ->
+                        val isSelected = selectedCat.equals(catName, ignoreCase = true)
+                        val displayName = if (catName.equals("All", ignoreCase = true)) s.allCategory else s.getCategoryDisplayName(catName)
+                        val emoji = s.getCategoryEmoji(catName)
+                        val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { it.category.equals(catName, ignoreCase = true) }
+
+                        Surface(
+                            onClick = { viewModel.setSelectedCategory(catName) },
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (isSelected) LocalTealPrimary else MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) LocalTealDark else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            shadowElevation = if (isSelected) 3.dp else 1.dp,
+                            modifier = Modifier.defaultMinSize(minHeight = 48.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = emoji,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.padding(end = 6.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = displayName,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        fontSize = 13.sp,
+                                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (count > 0) {
+                                        Text(
+                                            text = "$count ${if (s.isOdia) "ଆଇଟମ୍" else "items"}",
+                                            fontSize = 10.sp,
+                                            color = if (isSelected) Color.White.copy(alpha = 0.85f) else LocalTextSecondary
+                                        )
+                                    }
+                                }
+                                if (isSelected) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -362,35 +466,87 @@ fun CustomerHomeScreen(
 
             // Products Grid Title
             item {
-                Text(
-                    s.trendingItems,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
-                )
-            }
-
-            // Products
-            items(filteredProducts.chunked(2)) { pair ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    for (prod in pair) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            ProductCard(
-                                product = prod,
-                                onProductClick = { viewModel.navigateTo(Screen.ProductDetail(prod.id)) },
-                                isWishlisted = false,
-                                onAddToCart = { viewModel.addToCart(prod.id, prod.shopId, 1) },
-                                language = appLanguage
+                    Text(
+                        if (selectedCat.equals("All", ignoreCase = true)) s.trendingItems else "${s.getCategoryDisplayName(selectedCat)} (${filteredProducts.size})",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    if (!selectedCat.equals("All", ignoreCase = true)) {
+                        Text(
+                            text = "${filteredProducts.size} ${if (s.isOdia) "ଉପଲବ୍ଧ" else "items"}",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
+                        )
+                    }
+                }
+            }
+
+            if (filteredProducts.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "🛒",
+                                fontSize = 36.sp
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = if (s.isOdia) "ଏହି ବର୍ଗରେ ଏପର୍ଯ୍ୟନ୍ତ କୌଣସି ଉତ୍ପାଦ ମିଳିଲା ନାହିଁ।" else "No products found in this category right now.",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { viewModel.setSelectedCategory("All") },
+                                colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(s.allCategory)
+                            }
                         }
                     }
-                    if (pair.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
+                }
+            } else {
+                // Products
+                items(filteredProducts.chunked(2)) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        for (prod in pair) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                ProductCard(
+                                    product = prod,
+                                    onProductClick = { viewModel.navigateTo(Screen.ProductDetail(prod.id)) },
+                                    isWishlisted = false,
+                                    onAddToCart = { viewModel.addToCart(prod.id, prod.shopId, 1) },
+                                    language = appLanguage
+                                )
+                            }
+                        }
+                        if (pair.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -401,8 +557,16 @@ fun CustomerHomeScreen(
 @Composable
 fun CategoriesScreen(viewModel: MainViewModel) {
     val categories by viewModel.categories.collectAsState()
+    val products by viewModel.activeProducts.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
+    val allCategoryNames = remember(categories, products) {
+        val fromDb = categories.map { it.name }
+        val fromProducts = products.map { it.category }
+        val defaultList = com.example.data.local.SeedData.defaultCategoryNames
+        (listOf("All") + (fromDb + fromProducts + defaultList).distinct()).distinct().filter { it.isNotBlank() }
+    }
 
     Scaffold(
         topBar = {
@@ -423,12 +587,17 @@ fun CategoriesScreen(viewModel: MainViewModel) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(categories) { cat ->
+            items(allCategoryNames) { catName ->
+                val displayName = if (catName.equals("All", ignoreCase = true)) s.allCategory else s.getCategoryDisplayName(catName)
+                val emoji = s.getCategoryEmoji(catName)
+                val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { it.category.equals(catName, ignoreCase = true) }
+                val catEntity = categories.find { it.name.equals(catName, ignoreCase = true) }
+
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            viewModel.setSelectedCategory(cat.name)
+                            viewModel.setSelectedCategory(catName)
                             viewModel.navigateTo(Screen.CustomerHome)
                         },
                     shape = RoundedCornerShape(12.dp)
@@ -437,11 +606,32 @@ fun CategoriesScreen(viewModel: MainViewModel) {
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Category, contentDescription = null, tint = LocalTealPrimary, modifier = Modifier.size(32.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(emoji, fontSize = 22.sp)
+                            }
+                        }
                         Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(cat.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text(cat.description, color = LocalTextSecondary, fontSize = 12.sp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(displayName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            val desc = catEntity?.description ?: if (catName == "All") (if (s.isOdia) "ସମସ୍ତ ସାମଗ୍ରୀ ଓ ଉତ୍ପାଦ ବ୍ରାଉଜ କରନ୍ତୁ" else "Browse all available local products") else (if (s.isOdia) "ସ୍ଥାନୀୟ ସିନାପାଲି ଉତ୍ପାଦ" else "Local Sinapali products")
+                            Text(desc, color = LocalTextSecondary, fontSize = 12.sp, maxLines = 1)
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = LocalTealPrimary.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "$count",
+                                color = LocalTealPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
                         }
                     }
                 }

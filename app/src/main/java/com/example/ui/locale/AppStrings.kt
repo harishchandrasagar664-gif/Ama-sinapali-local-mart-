@@ -186,6 +186,55 @@ data class AppStrings(
         OrderStatus.CANCELLED -> orderStatusCancelled
     }
 
+    fun getCategoryDisplayName(categoryName: String): String {
+        if (!isOdia) return categoryName
+        return when (categoryName.trim()) {
+            "All" -> "ସବୁ ବର୍ଗ"
+            "Groceries & Spices" -> "କିରାନା ଓ ମସଲା"
+            "Fresh Vegetables" -> "ତାଜା ପନିପରିବା"
+            "Fresh Fruits" -> "ତାଜା ଫଳ"
+            "Fresh Vegetables & Fruits" -> "ପନିପରିବା ଓ ଫଳ"
+            "Sinapali Sweets & Dairy" -> "ସିନାପାଲି ମିଠା ଓ କ୍ଷୀର"
+            "Bakery & Snacks" -> "ବେକେରୀ ଓ ଜଳଖିଆ"
+            "Beverages & Cold Drinks" -> "ଥଣ୍ଡା ପାନୀୟ ଓ ଜୁସ୍"
+            "Electronics & Mobile" -> "ଇଲେକ୍ଟ୍ରୋନିକ୍ସ ଓ ମୋବାଇଲ୍"
+            "Handloom & Sambalpuri Clothes" -> "ସମ୍ବଲପୁରୀ ବସ୍ତ୍ର ଓ ପୋଷାକ"
+            "Personal Care & Hygiene" -> "ବ୍ୟକ୍ତିଗତ ଯତ୍ନ ଓ ପ୍ରସାଧନ"
+            "Home & Kitchen Essentials" -> "ଘରୋଇ ଓ ରୋଷେଇ ସାମଗ୍ରୀ"
+            "Puja & Festive Items" -> "ପୂଜା ଓ ପର୍ବ ସାମଗ୍ରୀ"
+            "Stationery & Books" -> "ଖାତା, ବହି ଓ ଷ୍ଟେସନାରୀ"
+            "Medicine & Healthcare" -> "ସ୍ୱାସ୍ଥ୍ୟ ଓ ଔଷଧ"
+            "Baby Care & Toys" -> "ଶିଶୁ ଯତ୍ନ ଓ ଖେଳନା"
+            "Hardware & Electricals" -> "ହାର୍ଡୱେର ଓ ବିଦ୍ୟୁତ"
+            "Paan & Refreshments", "Paan, Mukhwas & Refreshments" -> "ପାନ ଓ ମୁଖବାସ"
+            else -> categoryName
+        }
+    }
+
+    fun getCategoryEmoji(categoryName: String): String {
+        return when (categoryName.trim()) {
+            "All" -> "🛍️"
+            "Groceries & Spices" -> "🌾"
+            "Fresh Vegetables" -> "🥦"
+            "Fresh Fruits" -> "🍎"
+            "Fresh Vegetables & Fruits" -> "🥬"
+            "Sinapali Sweets & Dairy" -> "🍮"
+            "Bakery & Snacks" -> "🍪"
+            "Beverages & Cold Drinks" -> "🥤"
+            "Electronics & Mobile" -> "📱"
+            "Handloom & Sambalpuri Clothes" -> "🧵"
+            "Personal Care & Hygiene" -> "🧴"
+            "Home & Kitchen Essentials" -> "🍳"
+            "Puja & Festive Items" -> "🪔"
+            "Stationery & Books" -> "📚"
+            "Medicine & Healthcare" -> "💊"
+            "Baby Care & Toys" -> "🍼"
+            "Hardware & Electricals" -> "🔧"
+            "Paan & Refreshments", "Paan, Mukhwas & Refreshments" -> "🍃"
+            else -> "🏷️"
+        }
+    }
+
     companion object {
         val English = AppStrings(
             appName = "Ama Sinapali Local Mart",

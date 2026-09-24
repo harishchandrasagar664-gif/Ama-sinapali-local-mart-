@@ -35,6 +35,13 @@ class MartRepository(private val dao: MartDao) {
             dao.insertOrderItems(SeedData.sampleOrderItems)
             dao.insertReviews(SeedData.sampleReviews)
             dao.insertNotifications(SeedData.sampleNotifications)
+        } else {
+            // Ensure full category list and new products are always available
+            dao.insertCategories(SeedData.categories)
+            val existingProducts = dao.getAllProducts().first()
+            if (existingProducts.size < SeedData.products.size) {
+                dao.insertAllProducts(SeedData.products)
+            }
         }
     }
 
