@@ -175,6 +175,15 @@ class AuthManager(private val repository: MartRepository) {
         }
     }
 
+    suspend fun updateProfilePhoto(userId: Long, photoUri: String?) {
+        val user = _currentUser.value ?: repository.getUserById(userId) ?: return
+        val updatedUser = user.copy(profilePhotoUri = photoUri)
+        repository.updateUser(updatedUser)
+        if (_currentUser.value?.id == userId) {
+            _currentUser.value = updatedUser
+        }
+    }
+
     suspend fun loginAsShopOwner(phone: String): UserEntity {
         val existing = repository.getUserByPhone(phone)
         val user = if (existing != null && existing.role == UserRole.SHOP_OWNER) {

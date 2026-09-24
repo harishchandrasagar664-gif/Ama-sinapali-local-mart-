@@ -20,7 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.AppLanguage
+import com.example.ui.components.ProfilePhotoUploadDialog
 import com.example.ui.components.StatusBadge
+import com.example.ui.components.UserAvatar
 import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
@@ -86,6 +88,7 @@ fun CustomerProfileScreen(
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
     var showEditAddressDialog by remember { mutableStateOf(false) }
+    var showDpDialog by remember { mutableStateOf(false) }
 
     var editDistrict by remember(user) { mutableStateOf(user?.district ?: "Nuapada") }
     var editBlock by remember(user) { mutableStateOf(user?.block ?: "Sinapali") }
@@ -117,17 +120,15 @@ fun CustomerProfileScreen(
                 Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                modifier = Modifier.size(48.dp),
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                color = LocalTealPrimary
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Person, contentDescription = null, tint = Color.White)
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
+                            UserAvatar(
+                                photoUri = user?.profilePhotoUri,
+                                name = user?.name ?: "Customer",
+                                size = 64.dp,
+                                showEditBadge = true,
+                                onEditClick = { showDpDialog = true }
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(user?.name ?: "Customer", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
@@ -138,10 +139,23 @@ fun CustomerProfileScreen(
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        if (user?.isVerified == true) "Verified Customer (OTP)" else "Registered User",
+                                        if (user?.isVerified == true) (if (appLanguage == AppLanguage.ODIA) "ଯାଞ୍ଚ ହୋଇଥିବା ଗ୍ରାହକ (OTP)" else "Verified Customer (OTP)") else (if (appLanguage == AppLanguage.ODIA) "ପଞ୍ଜୀକୃତ ଉପଭୋକ୍ତା" else "Registered User"),
                                         fontSize = 12.sp,
                                         color = LocalSuccess,
                                         fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { showDpDialog = true },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(14.dp), tint = LocalTealPrimary)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        if (user?.profilePhotoUri != null) (if (appLanguage == AppLanguage.ODIA) "DP ବଦଳାନ୍ତୁ" else "Change DP") else (if (appLanguage == AppLanguage.ODIA) "DP ଯୋଡ଼ନ୍ତୁ" else "Add Profile Photo"),
+                                        fontSize = 12.sp,
+                                        color = LocalTealPrimary,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
@@ -454,6 +468,20 @@ fun CustomerProfileScreen(
                     TextButton(onClick = { showEditAddressDialog = false }) {
                         Text(s.cancelBtn)
                     }
+                }
+            )
+        }
+
+        if (showDpDialog) {
+            val shops by viewModel.allShops.collectAsState()
+            val myShop = shops.find { it.ownerId == user?.id }
+            ProfilePhotoUploadDialog(
+                language = appLanguage,
+                currentPhotoUri = user?.profilePhotoUri,
+                associatedShop = myShop,
+                onDismissRequest = { showDpDialog = false },
+                onPhotoSelected = { newUri ->
+                    viewModel.updateProfilePhoto(newUri)
                 }
             )
         }

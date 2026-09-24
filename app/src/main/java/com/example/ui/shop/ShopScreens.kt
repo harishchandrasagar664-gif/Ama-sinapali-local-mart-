@@ -37,7 +37,9 @@ import com.example.data.local.entities.ProductEntity
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.PromotionType
 import com.example.ui.components.OdiaGreetingHeader
+import com.example.ui.components.ProfilePhotoUploadDialog
 import com.example.ui.components.StatusBadge
+import com.example.ui.components.UserAvatar
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -49,9 +51,12 @@ fun ShopOwnerDashboardScreen(
 ) {
     val user by viewModel.currentUser.collectAsState()
     val currentRole by viewModel.currentRole.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
     val shops by viewModel.allShops.collectAsState()
     val orders by viewModel.allOrders.collectAsState()
     val products by viewModel.allProducts.collectAsState()
+
+    var showDpDialog by remember { mutableStateOf(false) }
 
     val myShop = shops.find { it.ownerId == (user?.id ?: 2) } ?: shops.firstOrNull()
     val myOrders = orders.filter { it.shopId == (myShop?.id ?: 1) }
@@ -101,6 +106,84 @@ fun ShopOwnerDashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Shop Owner Profile Card with DP
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            UserAvatar(
+                                photoUri = user?.profilePhotoUri ?: myShop?.imageUrl,
+                                name = user?.name ?: "Shop Owner",
+                                size = 64.dp,
+                                showEditBadge = true,
+                                onEditClick = { showDpDialog = true }
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    myShop?.name ?: "Sinapali Mart Partner Shop",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = LocalTealDark
+                                )
+                                Text(
+                                    "Owner: ${user?.name ?: "Shop Owner"}",
+                                    fontSize = 13.sp,
+                                    color = LocalTextSecondary
+                                )
+                                Text(
+                                    "📍 ${myShop?.address ?: "Sinapali"}",
+                                    fontSize = 11.sp,
+                                    color = LocalTextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showDpDialog = true },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Change DP", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            if (myShop != null) {
+                                FilledTonalButton(
+                                    onClick = { viewModel.useShopPhotoAsDp(myShop) },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = LocalAmberSecondary, contentColor = Color.Black),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Use Shop Photo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Card(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
@@ -174,6 +257,23 @@ fun ShopOwnerDashboardScreen(
                     }
                 }
             }
+        }
+
+        if (showDpDialog) {
+            ProfilePhotoUploadDialog(
+                language = appLanguage,
+                currentPhotoUri = user?.profilePhotoUri ?: myShop?.imageUrl,
+                associatedShop = myShop,
+                onDismissRequest = { showDpDialog = false },
+                onPhotoSelected = { newUri ->
+                    viewModel.updateProfilePhoto(newUri)
+                },
+                onShopPhotoSelected = { shopPhotoUri ->
+                    if (myShop != null) {
+                        viewModel.updateShopPhoto(myShop.id, shopPhotoUri)
+                    }
+                }
+            )
         }
     }
 }

@@ -19,7 +19,8 @@ data class UserEntity(
     val block: String = "Sinapali",
     val gp: String = "Sinapali",
     val village: String = "Sinapali",
-    val deliveryAddress: String = "Near Panchayat Samiti Office, Word No 4, Sinapali"
+    val deliveryAddress: String = "Near Panchayat Samiti Office, Word No 4, Sinapali",
+    val profilePhotoUri: String? = null
 )
 
 @Entity(tableName = "shops")

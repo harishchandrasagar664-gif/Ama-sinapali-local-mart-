@@ -176,6 +176,17 @@ data class AppStrings(
     val termsTitle: String get() = termsConditions
     val returnsRefundsTitle: String get() = returnsRefunds
 
+    val changeProfilePhoto: String get() = if (isOdia) "ପ୍ରୋଫାଇଲ୍ ଫଟୋ (DP) ବଦଳାନ୍ତୁ" else "Change Profile Photo (DP)"
+    val takePhotoCamera: String get() = if (isOdia) "📷 କ୍ୟାମେରା ଦ୍ୱାରା ଫଟୋ ଉଠାନ୍ତୁ" else "📷 Take Photo with Camera"
+    val chooseGallery: String get() = if (isOdia) "🖼️ ଗ୍ୟାଲେରୀରୁ ବାଛନ୍ତୁ" else "🖼️ Choose from Gallery"
+    val useShopLogoAsDp: String get() = if (isOdia) "🏪 ଦୋକାନ ଫଟୋ / ଲୋଗୋ ବ୍ୟବହାର କରନ୍ତୁ" else "🏪 Use Shop Photo as DP"
+    val useMartLogoAsDp: String get() = if (isOdia) "🛍️ ସିନାପାଲି ମାର୍ଟ ଲୋଗୋ ବ୍ୟବହାର କରନ୍ତୁ" else "🛍️ Use Sinapali Mart Logo as DP"
+    val alsoUpdateShopPhoto: String get() = if (isOdia) "ଦୋକାନର ଫଟୋ ଭାବେ ମଧ୍ୟ ସେଟ୍ କରନ୍ତୁ" else "Also set as Shop's main photo"
+    val removePhoto: String get() = if (isOdia) "🗑️ ଫଟୋ ହଟାନ୍ତୁ" else "🗑️ Remove Photo"
+    val photoUpdatedSuccess: String get() = if (isOdia) "ପ୍ରୋଫାଇଲ୍ ଫଟୋ ସଫଳତାର ସହିତ ଅପଡେଟ୍ ହେଲା! 📸" else "Profile photo updated successfully! 📸"
+    val cameraPermissionRequired: String get() = if (isOdia) "କ୍ୟାମେରା ଅନୁମତି ଆବଶ୍ୟକ" else "Camera permission is required"
+    val updateShopPhoto: String get() = if (isOdia) "ଦୋକାନ ବ୍ୟାନର / ଫଟୋ ବଦଳାନ୍ତୁ" else "Change Shop Banner / Photo"
+
     fun getStatusText(status: OrderStatus): String = when (status) {
         OrderStatus.PLACED -> orderStatusPlaced
         OrderStatus.ACCEPTED -> orderStatusAccepted

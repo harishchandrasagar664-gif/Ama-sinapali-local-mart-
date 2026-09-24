@@ -473,4 +473,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             com.example.domain.model.AppLanguage.ENGLISH
         }
     }
+
+    fun updateProfilePhoto(photoUri: String?) {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            authManager.updateProfilePhoto(user.id, photoUri)
+            _userMessage.value = if (photoUri != null) "Profile photo updated! 📸" else "Profile photo removed."
+        }
+    }
+
+    fun updateShopPhoto(shopId: Long, photoUri: String) {
+        viewModelScope.launch {
+            val shop = repository.getShopByIdSync(shopId)
+            if (shop != null) {
+                repository.updateShop(shop.copy(imageUrl = photoUri))
+                _userMessage.value = "Shop photo updated! 🏪"
+            }
+        }
+    }
+
+    fun useShopPhotoAsDp(shop: ShopEntity) {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            authManager.updateProfilePhoto(user.id, shop.imageUrl)
+            _userMessage.value = "Shop photo set as your DP! 🏪✨"
+        }
+    }
 }

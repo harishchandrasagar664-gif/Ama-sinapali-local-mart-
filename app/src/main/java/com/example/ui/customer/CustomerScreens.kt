@@ -34,6 +34,7 @@ import com.example.data.local.entities.ShopEntity
 import com.example.domain.model.AppLanguage
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.ProductCard
+import com.example.ui.components.UserAvatar
 import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
@@ -169,7 +170,17 @@ fun CustomerHomeScreen(
                 NavigationBarItem(
                     selected = false,
                     onClick = { viewModel.navigateTo(Screen.CustomerProfile) },
-                    icon = { Icon(Icons.Default.Person, contentDescription = s.navProfile) },
+                    icon = {
+                        if (!user?.profilePhotoUri.isNullOrBlank()) {
+                            UserAvatar(
+                                photoUri = user?.profilePhotoUri,
+                                name = user?.name ?: "Customer",
+                                size = 24.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Person, contentDescription = s.navProfile)
+                        }
+                    },
                     label = { Text(s.navProfile) }
                 )
             }
@@ -210,15 +221,23 @@ fun CustomerHomeScreen(
                         )
                     }
                     TextButton(
-                        onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
+                        onClick = { viewModel.navigateTo(Screen.CustomerProfile) },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
-                        Icon(
-                            Icons.Default.AccountCircle,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        if (!user?.profilePhotoUri.isNullOrBlank()) {
+                            UserAvatar(
+                                photoUri = user?.profilePhotoUri,
+                                name = user?.name ?: "Customer",
+                                size = 24.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.AccountCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             if (user?.isVerified == true) s.verifiedBadge else s.loginOtp,
                             fontSize = 11.sp,
