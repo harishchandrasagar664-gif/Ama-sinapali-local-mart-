@@ -42,7 +42,7 @@ fun PrivacyPolicyScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.privacyPolicyTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerProfile) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -245,7 +245,7 @@ fun AboutUsScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.aboutUsTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerProfile) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -349,7 +349,7 @@ fun TermsConditionsScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.termsTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerProfile) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -429,7 +429,7 @@ fun ReturnsRefundsScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.returnsRefundsTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerProfile) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },

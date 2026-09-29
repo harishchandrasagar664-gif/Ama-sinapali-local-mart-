@@ -160,6 +160,9 @@ interface MartDao {
     )
 
     // Order Items
+    @Query("SELECT * FROM order_items")
+    fun getAllOrderItems(): Flow<List<OrderItemEntity>>
+
     @Query("SELECT * FROM order_items WHERE orderId = :orderId")
     fun getOrderItems(orderId: Long): Flow<List<OrderItemEntity>>
 
@@ -235,11 +238,36 @@ interface MartDao {
     @Query("SELECT * FROM promotions WHERE shopId = :shopId ORDER BY submittedAt DESC")
     fun getPromotionsByShop(shopId: Long): Flow<List<PromotionEntity>>
 
+    @Query("SELECT * FROM promotions WHERE status = 'APPROVED' OR status = 'ACTIVE' ORDER BY submittedAt DESC")
+    fun getApprovedPromotions(): Flow<List<PromotionEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPromotion(promotion: PromotionEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllPromotions(promotions: List<PromotionEntity>)
+
+    @Update
+    suspend fun updatePromotion(promotion: PromotionEntity)
+
     @Query("UPDATE promotions SET status = :status WHERE id = :id")
     suspend fun updatePromotionStatus(id: Long, status: PromotionStatus)
+
+    @Query("UPDATE promotions SET status = :status, totalPrice = :price, durationDays = :duration, startDate = :startDate, endDate = :endDate, location = :location, adminNotes = :notes, approvedAt = :approvedAt WHERE id = :id")
+    suspend fun updatePromotionDetailsByAdmin(
+        id: Long,
+        status: PromotionStatus,
+        price: Double,
+        duration: Int,
+        startDate: String,
+        endDate: String,
+        location: String,
+        notes: String,
+        approvedAt: Long?
+    )
+
+    @Query("UPDATE promotions SET paymentStatus = :paymentStatus WHERE id = :id")
+    suspend fun updatePromotionPaymentStatus(id: Long, paymentStatus: String)
 
     // Complaints
     @Query("SELECT * FROM complaints ORDER BY filedAt DESC")

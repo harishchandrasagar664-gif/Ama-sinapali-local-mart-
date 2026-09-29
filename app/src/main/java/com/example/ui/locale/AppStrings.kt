@@ -129,6 +129,10 @@ data class AppStrings(
     val gpLabel: String,
     val villageLabel: String,
     val fullAddressLabel: String,
+    val logoutBtn: String,
+    val logoutConfirmTitle: String,
+    val logoutConfirmMessage: String,
+    val activeCustomerSessionBadge: String,
 
     // Auth Screen
     val accountTitle: String,
@@ -364,6 +368,10 @@ data class AppStrings(
             gpLabel = "Gram Panchayat (GP)",
             villageLabel = "Village / Town",
             fullAddressLabel = "Street / House / Ward Address",
+            logoutBtn = "Log Out (Active Session)",
+            logoutConfirmTitle = "Log Out from Customer Account?",
+            logoutConfirmMessage = "Are you sure you want to log out? Your active session will be cleared until you log in with OTP again.",
+            activeCustomerSessionBadge = "Active Customer Session",
 
             accountTitle = "Customer Account",
             accountSubtitle = "Verified Customer Login & Registration",
@@ -504,6 +512,10 @@ data class AppStrings(
             gpLabel = "ଗ୍ରାମ ପଞ୍ଚାୟତ (GP)",
             villageLabel = "ଗ୍ରାମ / ସହର",
             fullAddressLabel = "ସମ୍ପୂର୍ଣ୍ଣ ଠିକଣା / ୱାର୍ଡ / ରାସ୍ତା",
+            logoutBtn = "ଲଗ୍ ଆଉଟ୍ (Log Out)",
+            logoutConfirmTitle = "ଗ୍ରାହକ ଆକାଉଣ୍ଟରୁ ଲଗ୍ ଆଉଟ୍ କରିବେ କି?",
+            logoutConfirmMessage = "ଆପଣ ନିଶ୍ଚିତ ଭାବେ ଲଗ୍ ଆଉଟ୍ କରିବାକୁ ଚାହାଁନ୍ତି କି? ପୁନର୍ବାର OTP ଦେଇ ଲଗଇନ୍ ନକରିବା ପର୍ଯ୍ୟନ୍ତ ଏହା ଲଗ୍ ଆଉଟ୍ ରହିବ।",
+            activeCustomerSessionBadge = "ସକ୍ରିୟ ଗ୍ରାହକ ସେସନ୍",
 
             accountTitle = "ଗ୍ରାହକ ଖାତା",
             accountSubtitle = "ଯାଞ୍ଚ ହୋଇଥିବା ଗ୍ରାହକ ଲଗଇନ୍ ଓ ପଞ୍ଜୀକରଣ",

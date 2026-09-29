@@ -13,12 +13,36 @@ import com.example.service.RazorpayPaymentServiceImpl
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+data class PromotionPricingConfig(
+    val productAdDailyRate: Double = 40.0,
+    val promotionalBannerDailyRate: Double = 80.0,
+    val featuredShopDailyRate: Double = 100.0,
+    val locationBasedDailyRate: Double = 60.0,
+    val dateBasedDailyRate: Double = 50.0
+) {
+    fun getDailyRate(type: PromotionType): Double = when (type) {
+        PromotionType.PRODUCT_AD -> productAdDailyRate
+        PromotionType.PROMOTIONAL_BANNER, PromotionType.BANNER -> promotionalBannerDailyRate
+        PromotionType.FEATURED_SHOP -> featuredShopDailyRate
+        PromotionType.LOCATION_BASED -> locationBasedDailyRate
+        PromotionType.DATE_BASED -> dateBasedDailyRate
+        PromotionType.FEATURED_PRODUCT -> productAdDailyRate
+        PromotionType.DISCOUNT_COUPON -> promotionalBannerDailyRate
+    }
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getDatabase(application)
     val repository = MartRepository(database.martDao())
-    val authManager = AuthManager(repository)
+    val authManager = AuthManager(repository, application.applicationContext)
     val paymentService = RazorpayPaymentServiceImpl()
+
+    private val screenBackStack = ArrayDeque<Screen>()
+
+    init {
+        authManager.restoreSession(viewModelScope)
+    }
 
     private val _appLanguage = MutableStateFlow<com.example.domain.model.AppLanguage>(com.example.domain.model.AppLanguage.ENGLISH)
     val appLanguage: StateFlow<com.example.domain.model.AppLanguage> = _appLanguage.asStateFlow()
@@ -56,11 +80,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val allOrders: StateFlow<List<OrderEntity>> = repository.getAllOrders()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allOrderItems: StateFlow<List<OrderItemEntity>> = repository.getAllOrderItems()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val allUsers: StateFlow<List<UserEntity>> = repository.getAllUsers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPromotions: StateFlow<List<PromotionEntity>> = repository.getAllPromotions()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val approvedPromotions: StateFlow<List<PromotionEntity>> = repository.getApprovedPromotions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _promotionPricingConfig = MutableStateFlow(PromotionPricingConfig())
+    val promotionPricingConfig: StateFlow<PromotionPricingConfig> = _promotionPricingConfig.asStateFlow()
 
     val allComplaints: StateFlow<List<ComplaintEntity>> = repository.getAllComplaints()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -68,11 +101,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentUser: StateFlow<UserEntity?> = authManager.currentUser
     val currentRole: StateFlow<UserRole> = authManager.currentRole
 
-    val cartItems: StateFlow<List<CartItemEntity>> = currentUser
-        .flatMapLatest { user ->
-            if (user != null) repository.getCartItems(user.id) else flowOf(emptyList())
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val cartItems: StateFlow<List<CartItemEntity>> = combine(currentUser, currentRole) { user, role ->
+        Pair(user, role)
+    }.flatMapLatest { (user, role) ->
+        if (user != null && role == UserRole.CUSTOMER) repository.getCartItems(user.id) else flowOf(emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val detailedCartItems: StateFlow<List<CartItemWithProduct>> = combine(cartItems, activeProducts, allShops) { carts, prods, shops ->
         val prodMap = prods.associateBy { it.id }
@@ -120,7 +153,108 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
     fun navigateTo(screen: Screen) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        when (screen) {
+            is Screen.AdminDashboard,
+            is Screen.AdminDelivery,
+            is Screen.AdminOrders,
+            is Screen.AdminShops,
+            is Screen.AdminPromotions,
+            is Screen.AdminProducts,
+            is Screen.AdminUsers,
+            is Screen.AdminComplaints -> {
+                if (role != UserRole.ADMIN || user?.role != UserRole.ADMIN) {
+                    _userMessage.value = "Access Denied: Only Admin (Harishchandra Sagar) can access the Admin Panel."
+                    return
+                }
+            }
+
+            is Screen.ShopOwnerDashboard,
+            is Screen.ShopOrderManagement,
+            is Screen.ShopProductManagement,
+            is Screen.ShopOffersPromotions,
+            is Screen.ShopProfile -> {
+                if (role != UserRole.SHOP_OWNER || user?.role != UserRole.SHOP_OWNER) {
+                    _userMessage.value = "Access Denied: Customers cannot access the Shop Owner dashboard."
+                    return
+                }
+            }
+
+            // Strict Shop Owner restrictions: Shop Owners must never access customer accounts, profiles, carts, order history, or other shops' data
+            is Screen.CustomerProfile,
+            is Screen.CustomerAuth,
+            is Screen.Cart,
+            is Screen.Checkout,
+            is Screen.CustomerOrders,
+            is Screen.OrderTracking -> {
+                if (role == UserRole.SHOP_OWNER) {
+                    _userMessage.value = "Access Denied: Shop Owners cannot access customer accounts, profiles, carts, or order history."
+                    return
+                }
+            }
+
+            is Screen.ShopDetail -> {
+                if (role == UserRole.SHOP_OWNER) {
+                    val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user?.shopId) }
+                    if (myShop != null && screen.shopId != myShop.id) {
+                        _userMessage.value = "Access Denied: Shop Owners can only view and manage their own shop."
+                        return
+                    }
+                }
+            }
+
+            else -> {
+                // Public customer screens accessible
+            }
+        }
+
+        val cur = _currentScreen.value
+        if (cur is Screen.CustomerAuth && screen is Screen.CustomerHome) {
+            screenBackStack.removeAll { it is Screen.CustomerAuth }
+        }
+        if (cur !is Screen.Splash && cur != screen) {
+            if (screenBackStack.lastOrNull() != cur) {
+                screenBackStack.addLast(cur)
+            }
+        }
         _currentScreen.value = screen
+    }
+
+    fun navigateBack() {
+        // Back navigation must never log out the customer or clear the active customer session.
+        // If a customer is logged in, never pop back into CustomerAuth.
+        while (screenBackStack.isNotEmpty() && authManager.isCustomerSessionActive() && screenBackStack.last() is Screen.CustomerAuth) {
+            screenBackStack.removeLast()
+        }
+        // If in Shop Owner role, never pop into customer screens or other shops
+        if (currentRole.value == UserRole.SHOP_OWNER) {
+            while (screenBackStack.isNotEmpty() && (
+                screenBackStack.last() is Screen.CustomerProfile ||
+                screenBackStack.last() is Screen.CustomerAuth ||
+                screenBackStack.last() is Screen.Cart ||
+                screenBackStack.last() is Screen.Checkout ||
+                screenBackStack.last() is Screen.CustomerOrders ||
+                screenBackStack.last() is Screen.OrderTracking ||
+                screenBackStack.last() is Screen.CustomerHome
+            )) {
+                screenBackStack.removeLast()
+            }
+        }
+        if (screenBackStack.isNotEmpty()) {
+            val previous = screenBackStack.removeLast()
+            _currentScreen.value = previous
+        } else {
+            _currentScreen.value = if (currentRole.value == UserRole.SHOP_OWNER) Screen.ShopOwnerDashboard else Screen.CustomerHome
+        }
+    }
+
+    fun logoutCustomer() {
+        authManager.logout()
+        screenBackStack.clear()
+        _currentScreen.value = Screen.CustomerHome
+        _userMessage.value = "Logged out successfully."
     }
 
     fun setSearchQuery(query: String) {
@@ -138,6 +272,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addToCart(productId: Long, shopId: Long, quantity: Int = 1) {
         val user = currentUser.value ?: return
+        if (currentRole.value == UserRole.SHOP_OWNER) {
+            _userMessage.value = "Access Denied: Shop Owners cannot create or modify customer carts."
+            return
+        }
         viewModelScope.launch {
             repository.addToCart(user.id, productId, shopId, quantity)
             _userMessage.value = "Added to basket! 🛒"
@@ -181,6 +319,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         paymentMethod: PaymentMethod
     ) {
         val user = currentUser.value ?: return
+        if (currentRole.value == UserRole.SHOP_OWNER) {
+            _userMessage.value = "Access Denied: Shop Owners cannot access checkout or customer carts."
+            return
+        }
         val items = detailedCartItems.value
         if (items.isEmpty()) return
 
@@ -245,6 +387,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateOrderStatus(orderId: Long, newStatus: OrderStatus) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        if (role == UserRole.CUSTOMER) {
+            _userMessage.value = "Access Denied: Customers cannot change order status."
+            return
+        }
+
+        if (role == UserRole.SHOP_OWNER) {
+            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
+            val order = allOrders.value.find { it.id == orderId }
+            if (myShop == null || order?.shopId != myShop.id) {
+                _userMessage.value = "Access Denied: You can only update orders for your own shop."
+                return
+            }
+        }
+
         viewModelScope.launch {
             repository.updateOrderStatus(orderId, newStatus)
             _userMessage.value = "Order status updated to ${newStatus.name.replace('_', ' ')}"
@@ -253,6 +412,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Critical: Admin only handles delivery completion
     fun completeAdminDelivery(orderId: Long, enteredOtp: String, actualOtp: String, codCollected: Double?) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin (Harishchandra Sagar) can complete deliveries."
+            return
+        }
         viewModelScope.launch {
             repository.completeAdminDelivery(orderId, codCollected, "Harishchandra Sagar (Admin)")
             _userMessage.value = "Delivery marked complete! Cash collected & customer notified. 📦"
@@ -260,6 +423,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addOrUpdateProduct(product: ProductEntity) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        if (role == UserRole.CUSTOMER) {
+            _userMessage.value = "Access Denied: Customers cannot manage products."
+            return
+        }
+
+        if (role == UserRole.SHOP_OWNER) {
+            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
+            if (myShop == null || product.shopId != myShop.id) {
+                _userMessage.value = "Access Denied: You can only manage products for your own shop."
+                return
+            }
+        }
+
         viewModelScope.launch {
             if (product.id == 0L) {
                 repository.addProduct(product)
@@ -272,6 +451,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteProduct(product: ProductEntity) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        if (role == UserRole.CUSTOMER) {
+            _userMessage.value = "Access Denied: Customers cannot delete products."
+            return
+        }
+
+        if (role == UserRole.SHOP_OWNER) {
+            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
+            if (myShop == null || product.shopId != myShop.id) {
+                _userMessage.value = "Access Denied: You can only delete products from your own shop."
+                return
+            }
+        }
+
         viewModelScope.launch {
             repository.deleteProduct(product)
             _userMessage.value = "Product removed."
@@ -279,26 +474,185 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleProductStock(product: ProductEntity) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        if (role == UserRole.SHOP_OWNER) {
+            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
+            if (myShop == null || product.shopId != myShop.id) {
+                _userMessage.value = "Access Denied: You can only update stock for your own shop."
+                return
+            }
+        }
+
         viewModelScope.launch {
             repository.updateProduct(product.copy(isAvailable = !product.isAvailable))
         }
     }
 
-    fun submitPromotionRequest(shop: ShopEntity, type: PromotionType, targetId: Long, targetName: String, notes: String) {
+    fun createShopPromotion(
+        shop: ShopEntity,
+        type: PromotionType,
+        title: String,
+        description: String,
+        targetProductId: Long? = null,
+        targetProductName: String? = null,
+        location: String = "Sinapali Town",
+        durationDays: Int = 7,
+        startDate: String = "",
+        endDate: String = "",
+        dailyRate: Double,
+        totalPrice: Double,
+        onSuccess: () -> Unit = {}
+    ) {
+        val role = currentRole.value
+        val user = currentUser.value
+
+        if (role == UserRole.SHOP_OWNER) {
+            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
+            if (myShop == null || shop.id != myShop.id) {
+                _userMessage.value = "Access Denied: You can only request promotions for your own shop."
+                return
+            }
+        }
+
         viewModelScope.launch {
-            val promotion = PromotionEntity(
+            val promo = PromotionEntity(
                 shopId = shop.id,
-                title = "$targetName Promotion",
-                description = notes,
+                shopName = shop.name,
+                title = title.ifBlank { "${shop.name} Promotion" },
+                description = description,
                 type = type,
-                status = PromotionStatus.PENDING_APPROVAL
+                status = PromotionStatus.PENDING_APPROVAL,
+                targetProductId = targetProductId,
+                targetProductName = targetProductName,
+                location = location,
+                durationDays = durationDays,
+                startDate = startDate,
+                endDate = endDate,
+                dailyRate = dailyRate,
+                totalPrice = totalPrice,
+                paymentStatus = "Pending Payment / Post-Approval",
+                submittedAt = System.currentTimeMillis()
             )
-            repository.createPromotion(promotion)
-            _userMessage.value = "Promotion request submitted for Admin review."
+            repository.createPromotion(promo)
+
+            // Notify Admin Harishchandra Sagar
+            val adminUser = SeedData.adminUser
+            repository.insertNotification(
+                NotificationEntity(
+                    userId = adminUser.id,
+                    title = "New Promotion Request 📢",
+                    message = "Shop '${shop.name}' submitted a ${type.name.replace('_', ' ')}: '$title' for ₹${totalPrice.toInt()}. Pending your approval.",
+                    type = NotificationType.SYSTEM
+                )
+            )
+
+            _userMessage.value = "Promotion submitted! Status: Pending Admin Approval."
+            onSuccess()
         }
     }
 
+    fun submitPromotionRequest(shop: ShopEntity, type: PromotionType, targetId: Long, targetName: String, notes: String) {
+        val config = _promotionPricingConfig.value
+        val dailyRate = config.getDailyRate(type)
+        createShopPromotion(
+            shop = shop,
+            type = type,
+            title = "$targetName Promotion",
+            description = notes,
+            targetProductId = if (type == PromotionType.PRODUCT_AD || type == PromotionType.FEATURED_PRODUCT) targetId else null,
+            targetProductName = if (type == PromotionType.PRODUCT_AD || type == PromotionType.FEATURED_PRODUCT) targetName else null,
+            location = "Sinapali Town",
+            durationDays = 7,
+            startDate = "2026-09-29",
+            endDate = "2026-10-06",
+            dailyRate = dailyRate,
+            totalPrice = dailyRate * 7
+        )
+    }
+
+    fun updatePromotionDetailsByAdmin(
+        id: Long,
+        status: PromotionStatus,
+        price: Double,
+        duration: Int,
+        startDate: String,
+        endDate: String,
+        location: String,
+        notes: String,
+        shopOwnerUserId: Long? = null,
+        promoTitle: String = ""
+    ) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin (Harishchandra Sagar) can review promotions."
+            return
+        }
+        viewModelScope.launch {
+            repository.updatePromotionDetailsByAdmin(
+                id = id,
+                status = status,
+                price = price,
+                duration = duration,
+                startDate = startDate,
+                endDate = endDate,
+                location = location,
+                notes = notes
+            )
+            // Notify Shop Owner of Admin decision
+            if (shopOwnerUserId != null && shopOwnerUserId > 0) {
+                val notifTitle = if (status == PromotionStatus.APPROVED || status == PromotionStatus.ACTIVE) {
+                    "Promotion Approved! 🎉"
+                } else if (status == PromotionStatus.REJECTED) {
+                    "Promotion Update: Rejected ⚠️"
+                } else {
+                    "Promotion Details Updated 📝"
+                }
+                val notifMsg = if (status == PromotionStatus.APPROVED) {
+                    "Your promotion '$promoTitle' was approved by Admin Harishchandra Sagar for ₹${price.toInt()} at $location. It is now visible to customers."
+                } else if (status == PromotionStatus.REJECTED) {
+                    "Your promotion '$promoTitle' was not approved. Note: $notes"
+                } else {
+                    "Admin updated promotion '$promoTitle': ₹${price.toInt()}, $duration days at $location."
+                }
+                repository.insertNotification(
+                    NotificationEntity(
+                        userId = shopOwnerUserId,
+                        title = notifTitle,
+                        message = notifMsg,
+                        type = NotificationType.SYSTEM
+                    )
+                )
+            }
+            _userMessage.value = "Promotion ${status.name.lowercase().replace('_', ' ')} successfully."
+        }
+    }
+
+    fun updatePromotionPaymentStatus(id: Long, paymentStatus: String) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin can update payment status."
+            return
+        }
+        viewModelScope.launch {
+            repository.updatePromotionPaymentStatus(id, paymentStatus)
+            _userMessage.value = "Payment status updated to $paymentStatus"
+        }
+    }
+
+    fun updatePromotionPricingConfig(newConfig: PromotionPricingConfig) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin can configure promotion prices."
+            return
+        }
+        _promotionPricingConfig.value = newConfig
+        _userMessage.value = "Admin promotion pricing rates updated."
+    }
+
     fun updatePromotionStatus(promotionId: Long, status: PromotionStatus) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin can approve promotions."
+            return
+        }
         viewModelScope.launch {
             repository.updatePromotionStatus(promotionId, status)
             _userMessage.value = "Promotion status updated to ${status.name}"
@@ -306,6 +660,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateShopApproval(shop: ShopEntity, isApproved: Boolean) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin can approve or restrict shops."
+            return
+        }
         viewModelScope.launch {
             repository.updateShop(shop.copy(isApproved = isApproved))
             _userMessage.value = "Shop ${if (isApproved) "approved" else "restricted"}."
@@ -313,10 +671,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateProductApproval(product: ProductEntity, isApproved: Boolean) {
+        if (currentRole.value != UserRole.ADMIN) {
+            _userMessage.value = "Access Denied: Only Admin can approve or restrict products."
+            return
+        }
         viewModelScope.launch {
             repository.updateProduct(product.copy(isApproved = isApproved))
             _userMessage.value = "Product ${if (isApproved) "approved" else "restricted"}."
         }
+    }
+
+    // Role Authentication methods
+    fun loginShopOwnerWithCredentials(phoneOrEmail: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val owner = authManager.loginAsShopOwner(phoneOrEmail)
+            if (owner != null) {
+                val myShop = allShops.value.find { it.ownerId == owner.id || (owner.shopId != null && it.id == owner.shopId) }
+                screenBackStack.clear()
+                _userMessage.value = "Welcome, ${owner.name}! Accessing ${myShop?.name ?: "your shop"}."
+                navigateTo(Screen.ShopOwnerDashboard)
+                onResult(true, "Authenticated as ${owner.name}")
+            } else {
+                onResult(false, "Access Denied: No Shop Owner account found with '$phoneOrEmail'. Customers cannot access the Shop Owner dashboard.")
+            }
+        }
+    }
+
+    fun loginAdminWithPin(pin: String, onResult: (Boolean, String) -> Unit) {
+        val success = authManager.loginAsAdminWithPin(pin)
+        if (success) {
+            _userMessage.value = "Welcome, Harishchandra Sagar! Admin Panel unlocked."
+            navigateTo(Screen.AdminDashboard)
+            onResult(true, "Admin Panel Unlocked")
+        } else {
+            onResult(false, "Access Denied: Invalid Admin Security PIN. Admin Panel is restricted.")
+        }
+    }
+
+    fun switchToCustomerView() {
+        authManager.switchToCustomerView()
+        _currentScreen.value = Screen.CustomerHome
+        _userMessage.value = "Switched to Customer Store"
     }
 
     fun fileComplaint(shopId: Long, shopName: String, subject: String, description: String) {
@@ -407,9 +802,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loginCustomerWithVerifiedOtp(user: UserEntity, onSuccess: () -> Unit) {
-        authManager.loginExistingCustomer(user)
+        val verified = user.copy(isVerified = true)
+        authManager.loginExistingCustomer(verified)
+        viewModelScope.launch {
+            repository.updateUser(verified)
+        }
         resetCustomerOtpState()
-        _userMessage.value = "Welcome back, ${user.name}!"
+        screenBackStack.removeAll { it is Screen.CustomerAuth }
+        _userMessage.value = "Welcome back, ${verified.name}!"
         onSuccess()
     }
 
@@ -436,6 +836,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fullAddress = fullAddress
             )
             resetCustomerOtpState()
+            screenBackStack.removeAll { it is Screen.CustomerAuth }
             _userMessage.value = "Registration complete! Odisha address saved."
             onSuccess()
         }

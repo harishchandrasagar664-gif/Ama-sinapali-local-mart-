@@ -185,13 +185,25 @@ data class PromotionEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val shopId: Long,
+    val shopName: String = "",
     val title: String,
     val description: String,
     val type: PromotionType,
     val status: PromotionStatus = PromotionStatus.PENDING_APPROVAL,
+    val targetProductId: Long? = null,
+    val targetProductName: String? = null,
+    val location: String = "Sinapali Town",
+    val durationDays: Int = 7,
+    val startDate: String = "",
+    val endDate: String = "",
+    val dailyRate: Double = 50.0,
+    val totalPrice: Double = 350.0,
+    val paymentStatus: String = "Pending Payment",
+    val adminNotes: String = "",
     val discountPercent: Double = 0.0,
     val couponCode: String = "",
-    val submittedAt: Long = System.currentTimeMillis()
+    val submittedAt: Long = System.currentTimeMillis(),
+    val approvedAt: Long? = null
 )
 
 @Entity(tableName = "complaints")

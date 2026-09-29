@@ -23,6 +23,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import java.io.File
+import androidx.compose.ui.graphics.Shape
 import com.example.R
 import com.example.data.local.entities.ProductEntity
 import com.example.domain.model.AppLanguage
@@ -112,15 +115,25 @@ fun OdiaGreetingHeader(
                 FilledTonalButton(
                     onClick = onRoleSwitchClick,
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = LocalAmberSecondary,
-                        contentColor = Color.Black
+                        containerColor = if (currentRole == UserRole.CUSTOMER) Color.White.copy(alpha = 0.25f) else LocalAmberSecondary,
+                        contentColor = if (currentRole == UserRole.CUSTOMER) Color.White else Color.Black
                     ),
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Portal", modifier = Modifier.size(16.dp))
+                    val icon = when (currentRole) {
+                        UserRole.ADMIN -> Icons.Default.AdminPanelSettings
+                        UserRole.SHOP_OWNER -> Icons.Default.Storefront
+                        UserRole.CUSTOMER -> Icons.Default.Lock
+                    }
+                    val label = when (currentRole) {
+                        UserRole.ADMIN -> "Admin Controls"
+                        UserRole.SHOP_OWNER -> "Shop Portal"
+                        UserRole.CUSTOMER -> "Staff Login"
+                    }
+                    Icon(icon, contentDescription = "Role Access", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(s.portalBtn, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }
@@ -208,6 +221,91 @@ fun StatusBadge(
 }
 
 @Composable
+fun ProductImage(
+    imageUrl: String?,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+    contentScale: ContentScale = ContentScale.Crop,
+    shape: Shape = RoundedCornerShape(8.dp),
+    fallbackIcon: ImageVector = Icons.Default.ShoppingBag
+) {
+    Surface(
+        modifier = modifier,
+        shape = shape,
+        color = Color(0xFFF1F5F9)
+    ) {
+        when {
+            imageUrl.isNullOrBlank() -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = fallbackIcon,
+                        contentDescription = contentDescription,
+                        tint = LocalTealPrimary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+            imageUrl == "ic_mart_icon" -> {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_mart_icon),
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale
+                )
+            }
+            imageUrl == "hero_local_mart" -> {
+                Image(
+                    painter = painterResource(id = R.drawable.hero_local_mart),
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale
+                )
+            }
+            else -> {
+                val cleanPath = imageUrl.removePrefix("file:")
+                val model: Any = if (cleanPath.startsWith("/")) {
+                    val file = File(cleanPath)
+                    if (file.exists()) file else imageUrl
+                } else {
+                    imageUrl
+                }
+                SubcomposeAsyncImage(
+                    model = model,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale,
+                    loading = {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFFE2E8F0)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = LocalTealPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        }
+                    },
+                    error = {
+                        Image(
+                            painter = painterResource(id = R.drawable.hero_local_mart),
+                            contentDescription = contentDescription,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = contentScale
+                        )
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun ProductCard(
     product: ProductEntity,
     onProductClick: () -> Unit,
@@ -229,15 +327,13 @@ fun ProductCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
-                    .background(Color(0xFFF1F5F9)),
-                contentAlignment = Alignment.Center
+                    .height(130.dp)
             ) {
-                Icon(
-                    Icons.Default.ShoppingBag,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = LocalTealPrimary.copy(alpha = 0.5f)
+                ProductImage(
+                    imageUrl = product.imageUrl,
+                    contentDescription = product.name,
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 0.dp)
                 )
                 if (product.stock <= 0) {
                     Surface(
@@ -310,6 +406,58 @@ fun ProductCard(
                             modifier = Modifier.size(20.dp)
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AccessDeniedScreen(
+    title: String,
+    message: String,
+    onGoBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "Access Denied",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(56.dp)
+                )
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Text(
+                    text = message,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Button(
+                    onClick = onGoBack,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Return to Customer Store", color = Color.White)
                 }
             }
         }

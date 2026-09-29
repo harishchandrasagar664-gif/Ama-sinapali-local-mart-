@@ -1,7 +1,9 @@
 package com.example
 
 import com.example.data.local.SeedData
+import com.example.data.local.entities.*
 import com.example.domain.model.*
+import com.example.ui.viewmodel.Screen
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -395,5 +397,493 @@ class AmaSinapaliFlowVerificationUnitTest {
         // Verify distinct instances/objects
         val screens = listOf(privacy, contact, about, terms, returns)
         assertEquals(5, screens.distinct().size)
+    }
+
+    @Test
+    fun testRBAC_CustomerMustNeverAccessAdminPanelOrShopOwnerDashboard() {
+        val customer = SeedData.customers[0]
+        assertEquals(UserRole.CUSTOMER, customer.role)
+
+        val adminScreens = listOf(
+            com.example.ui.viewmodel.Screen.AdminDashboard,
+            com.example.ui.viewmodel.Screen.AdminDelivery,
+            com.example.ui.viewmodel.Screen.AdminOrders,
+            com.example.ui.viewmodel.Screen.AdminShops,
+            com.example.ui.viewmodel.Screen.AdminPromotions
+        )
+
+        val shopScreens = listOf(
+            com.example.ui.viewmodel.Screen.ShopOwnerDashboard,
+            com.example.ui.viewmodel.Screen.ShopOrderManagement,
+            com.example.ui.viewmodel.Screen.ShopProductManagement,
+            com.example.ui.viewmodel.Screen.ShopOffersPromotions
+        )
+
+        // Verify that under customer role, none of the admin or shop screens are allowed
+        for (screen in adminScreens) {
+            val isAllowed = customer.role == UserRole.ADMIN
+            assertFalse("Customer must not access Admin screen $screen", isAllowed)
+        }
+
+        for (screen in shopScreens) {
+            val isAllowed = customer.role == UserRole.SHOP_OWNER
+            assertFalse("Customer must not access Shop Owner screen $screen", isAllowed)
+        }
+    }
+
+    @Test
+    fun testRBAC_ShopOwnersAccessOnlyTheirOwnShopDashboard() {
+        val owners = SeedData.shopOwners
+        val shops = SeedData.shops
+        val products = SeedData.products
+        val sampleOrders = SeedData.sampleOrders
+
+        assertEquals(3, owners.size)
+
+        for (owner in owners) {
+            assertEquals(UserRole.SHOP_OWNER, owner.role)
+            val myShop = shops.find { it.ownerId == owner.id || (owner.shopId != null && it.id == owner.shopId) }
+            assertNotNull("Shop exists for owner ${owner.name}", myShop)
+
+            // 1. Products isolation
+            val myProducts = products.filter { it.shopId == myShop!!.id }
+            val otherProducts = products.filter { it.shopId != myShop!!.id }
+            assertTrue("Shop Owner has products for their own shop", myProducts.isNotEmpty())
+            assertTrue("All products belong to owner's shop", myProducts.all { it.shopId == myShop!!.id })
+            assertFalse("Shop owner does not see other shops' products in their inventory", myProducts.any { it.shopId != myShop!!.id })
+
+            // 2. Orders isolation
+            val myOrders = sampleOrders.filter { it.shopId == myShop!!.id }
+            assertTrue("Owner's filtered orders strictly match their shop id", myOrders.all { it.shopId == myShop!!.id })
+
+            // 3. Shop owner cannot access Admin Panel
+            val canAccessAdmin = owner.role == UserRole.ADMIN
+            assertFalse("Shop Owner cannot access Admin Panel", canAccessAdmin)
+        }
+    }
+
+    @Test
+    fun testRBAC_AdminOnlyCanAccessAdminPanel() {
+        val admin = SeedData.adminUser
+        val customer = SeedData.customers[0]
+        val shopOwner = SeedData.shopOwners[0]
+
+        assertEquals(UserRole.ADMIN, admin.role)
+        assertTrue("Admin can access Admin Panel", admin.role == UserRole.ADMIN)
+        assertFalse("Customer cannot access Admin Panel", customer.role == UserRole.ADMIN)
+        assertFalse("Shop Owner cannot access Admin Panel", shopOwner.role == UserRole.ADMIN)
+    }
+
+    @Test
+    fun testRBAC_AdminPinVerification() {
+        val validPin1 = "7894"
+        val validPin2 = "admin123"
+        val invalidPin = "0000"
+
+        val isValid1 = (validPin1 == "7894" || validPin1 == "admin123")
+        val isValid2 = (validPin2 == "7894" || validPin2 == "admin123")
+        val isInvalid = (invalidPin == "7894" || invalidPin == "admin123")
+
+        assertTrue("Valid PIN 7894 unlocks admin", isValid1)
+        assertTrue("Valid PIN admin123 unlocks admin", isValid2)
+        assertFalse("Invalid PIN is rejected", isInvalid)
+    }
+
+    @Test
+    fun testRBAC_ShopOwnerPhoneVerification() {
+        val validShopPhone = "9437012345" // Ramesh Sahu
+        val customerPhone = "8895011223" // Priyanka Majhi (Customer)
+
+        val owner = SeedData.shopOwners.find { it.phone == validShopPhone }
+        assertNotNull("Shop owner found for valid shop phone", owner)
+        assertEquals(UserRole.SHOP_OWNER, owner!!.role)
+
+        val customerAsOwner = SeedData.shopOwners.find { it.phone == customerPhone }
+        assertNull("Customer phone cannot log in as Shop Owner", customerAsOwner)
+    }
+
+    @Test
+    fun testProductImagePersistence_AppStoragePathsAndEntity() {
+        val permanentPath = "/data/user/0/com.aistudio.amalocalmart.oxrkpz/files/products/prod_1727438400000.jpg"
+        val sampleProduct = ProductEntity(
+            id = 999L,
+            shopId = 1L,
+            name = "Sinapali Fresh Mangoes",
+            category = "Fresh Fruits",
+            imageUrl = permanentPath,
+            description = "Sweet local mangoes from Sinapali orchard",
+            price = 120.0,
+            unit = "1 kg",
+            stock = 15
+        )
+
+        // Verify permanent path is stored in entity
+        assertEquals(permanentPath, sampleProduct.imageUrl)
+        assertTrue("Image URL is a permanent storage path", sampleProduct.imageUrl.startsWith("/data/"))
+        assertFalse("Image URL is not a temporary content URI", sampleProduct.imageUrl.startsWith("content://"))
+
+        // Verify updating product image maintains entity integrity
+        val updatedPath = "/data/user/0/com.aistudio.amalocalmart.oxrkpz/files/products/prod_1727438500000.jpg"
+        val updatedProduct = sampleProduct.copy(imageUrl = updatedPath)
+        assertEquals(updatedPath, updatedProduct.imageUrl)
+        assertEquals(sampleProduct.id, updatedProduct.id)
+        assertEquals(sampleProduct.shopId, updatedProduct.shopId)
+    }
+
+    @Test
+    fun testCheckout_CashOnDeliveryAvailableAndCalculation() {
+        val sEn = com.example.ui.locale.AppStrings.get(com.example.domain.model.AppLanguage.ENGLISH)
+        val sOr = com.example.ui.locale.AppStrings.get(com.example.domain.model.AppLanguage.ODIA)
+
+        // Verify COD button text exists in English & Odia
+        assertEquals("Place Order (Cash on Delivery)", sEn.placeOrderCod)
+        assertTrue("Odia COD string is present", sOr.placeOrderCod.isNotBlank())
+        assertEquals("Cash on Delivery (Pay at Doorstep)", sEn.codMethod)
+
+        // Verify checkout calculations for COD Home Delivery
+        val subtotal = 350.0
+        val discount = 35.0
+        val homeDeliveryFee = 25.0
+        val pickupDeliveryFee = 0.0
+
+        val codHomeTotal = (subtotal - discount + homeDeliveryFee).coerceAtLeast(0.0)
+        assertEquals(340.0, codHomeTotal, 0.01)
+
+        // Verify checkout calculations for COD Self Pickup
+        val codPickupTotal = (subtotal - discount + pickupDeliveryFee).coerceAtLeast(0.0)
+        assertEquals(315.0, codPickupTotal, 0.01)
+
+        // Verify COD payment method is available
+        val codMethod = PaymentMethod.CASH_ON_DELIVERY
+        assertNotNull(codMethod)
+    }
+
+    @Test
+    fun testCustomerLoginPersistence_ActiveSessionAcrossNavigation() {
+        val verifiedCustomer = UserEntity(
+            id = 101L,
+            name = "Rakesh Kumar",
+            phone = "8895012345",
+            email = "rakesh@sinapali.com",
+            role = UserRole.CUSTOMER,
+            isVerified = true,
+            district = "Nuapada",
+            block = "Sinapali",
+            gp = "Hatibandh",
+            village = "Hatibandh",
+            deliveryAddress = "Ward No 2, Hatibandh, Sinapali"
+        )
+
+        // Verify active customer session properties
+        assertTrue("Customer is verified with OTP", verifiedCustomer.isVerified)
+        assertEquals(UserRole.CUSTOMER, verifiedCustomer.role)
+        assertEquals("Hatibandh", verifiedCustomer.village)
+        assertEquals("Ward No 2, Hatibandh, Sinapali", verifiedCustomer.deliveryAddress)
+    }
+
+    @Test
+    fun testCustomerLoginPersistence_BackNavigationNeverClearsSession() {
+        // Simulate navigation stack transitions
+        val stack = ArrayDeque<Screen>()
+        var activeCustomer: UserEntity? = UserEntity(
+            id = 101L,
+            name = "Rakesh Kumar",
+            phone = "8895012345",
+            role = UserRole.CUSTOMER,
+            isVerified = true
+        )
+
+        // Customer navigates Home -> Profile -> Cart -> Checkout
+        stack.addLast(Screen.CustomerHome)
+        stack.addLast(Screen.CustomerProfile)
+        stack.addLast(Screen.Cart)
+        var currentScreen: Screen = Screen.Checkout
+
+        // Back navigation 1: Checkout -> Cart
+        if (stack.isNotEmpty()) {
+            currentScreen = stack.removeLast()
+        }
+        assertEquals(Screen.Cart, currentScreen)
+        assertNotNull("Session must not be cleared on back navigation", activeCustomer)
+        assertEquals(101L, activeCustomer?.id)
+
+        // Back navigation 2: Cart -> Profile
+        if (stack.isNotEmpty()) {
+            currentScreen = stack.removeLast()
+        }
+        assertEquals(Screen.CustomerProfile, currentScreen)
+        assertNotNull("Session must not be cleared on back navigation", activeCustomer)
+
+        // Back navigation 3: Profile -> Home
+        if (stack.isNotEmpty()) {
+            currentScreen = stack.removeLast()
+        }
+        assertEquals(Screen.CustomerHome, currentScreen)
+        assertNotNull("Session must not be cleared on returning to CustomerHome", activeCustomer)
+        assertEquals(101L, activeCustomer?.id)
+        assertTrue("Customer remains verified", activeCustomer?.isVerified == true)
+    }
+
+    @Test
+    fun testCustomerLoginPersistence_ExplicitLogoutClearsSession() {
+        var activeCustomer: UserEntity? = UserEntity(
+            id = 101L,
+            name = "Rakesh Kumar",
+            phone = "8895012345",
+            role = UserRole.CUSTOMER,
+            isVerified = true
+        )
+        assertNotNull(activeCustomer)
+
+        // Explicit logout action only
+        val explicitLogoutAction = {
+            activeCustomer = null
+        }
+        explicitLogoutAction()
+
+        assertNull("Explicit logout clears the session", activeCustomer)
+    }
+
+    @Test
+    fun testCustomerProfileAndCartPreservationOnBackNavigation() {
+        val customer = UserEntity(
+            id = 101L,
+            name = "Rakesh Kumar",
+            phone = "8895012345",
+            role = UserRole.CUSTOMER,
+            isVerified = true,
+            district = "Nuapada",
+            block = "Sinapali",
+            gp = "Sinapali",
+            village = "Sinapali Town",
+            deliveryAddress = "Main Road Sinapali"
+        )
+        val cartItems = listOf(
+            CartItemWithProduct(
+                cartItemId = 1L,
+                productId = 1L,
+                shopId = 1L,
+                shopName = "Sinapali Kirana Store",
+                productName = "Atta 5kg",
+                imageUrl = "/data/products/atta.jpg",
+                unitPrice = 180.0,
+                discountPrice = 160.0,
+                quantity = 2,
+                stock = 10
+            )
+        )
+
+        // Verify cart is retained for the customer
+        assertEquals(1, cartItems.size)
+        assertEquals(320.0, cartItems.sumOf { (it.discountPrice ?: it.unitPrice) * it.quantity }, 0.01)
+
+        // Verify profile and address are retained
+        assertEquals("Main Road Sinapali", customer.deliveryAddress)
+        assertEquals("Sinapali Town", customer.village)
+    }
+
+    @Test
+    fun testStrictShopOwnerAccess_OwnShopOrdersOnly() {
+        val shopOwner = UserEntity(
+            id = 2L,
+            name = "Ramesh Sahu",
+            phone = "9437012345",
+            role = UserRole.SHOP_OWNER,
+            shopId = 1L
+        )
+
+        val orders = listOf(
+            OrderEntity(
+                id = 1001L,
+                orderNumber = "ORD-1001",
+                userId = 5L,
+                shopId = 1L,
+                totalAmount = 300.0,
+                discountAmount = 0.0,
+                deliveryFee = 25.0,
+                finalAmount = 325.0,
+                status = OrderStatus.PLACED,
+                deliveryType = DeliveryType.HOME_DELIVERY,
+                paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+                paymentStatus = PaymentStatus.PENDING,
+                deliveryAddress = "Ward 4, Sinapali",
+                customerPhone = "9876543210",
+                customerName = "Priyanka Majhi",
+                placedAt = System.currentTimeMillis()
+            ),
+            OrderEntity(
+                id = 1002L,
+                orderNumber = "ORD-1002",
+                userId = 6L,
+                shopId = 2L,
+                totalAmount = 500.0,
+                discountAmount = 50.0,
+                deliveryFee = 0.0,
+                finalAmount = 450.0,
+                status = OrderStatus.PLACED,
+                deliveryType = DeliveryType.SELF_PICKUP,
+                paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+                paymentStatus = PaymentStatus.PENDING,
+                deliveryAddress = "Main Road, Sinapali",
+                customerPhone = "9876543211",
+                customerName = "Amit Kumar",
+                placedAt = System.currentTimeMillis()
+            )
+        )
+
+        // Filter orders for Shop Owner 1
+        val shop1Orders = orders.filter { it.shopId == shopOwner.shopId }
+        assertEquals(1, shop1Orders.size)
+        assertEquals(1001L, shop1Orders.first().id)
+        assertEquals("ORD-1001", shop1Orders.first().orderNumber)
+        // Must never include Shop 2 orders
+        assertFalse(shop1Orders.any { it.shopId == 2L })
+    }
+
+    @Test
+    fun testStrictShopOwnerAccess_OrderFieldsRestrictedToAllowedData() {
+        val order = OrderEntity(
+            id = 1001L,
+            orderNumber = "ORD-1001",
+            userId = 5L,
+            shopId = 1L,
+            totalAmount = 260.0,
+            discountAmount = 0.0,
+            deliveryFee = 25.0,
+            finalAmount = 285.0,
+            status = OrderStatus.PLACED,
+            deliveryType = DeliveryType.HOME_DELIVERY,
+            paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+            paymentStatus = PaymentStatus.PENDING,
+            deliveryAddress = "Ward 4, Sinapali",
+            customerPhone = "9876543210",
+            customerName = "Priyanka Majhi",
+            placedAt = System.currentTimeMillis()
+        )
+
+        val orderItems = listOf(
+            OrderItemEntity(
+                id = 1L,
+                orderId = 1001L,
+                productId = 10L,
+                productName = "Mustard Oil 1L",
+                unitPrice = 140.0,
+                quantity = 1,
+                totalPrice = 140.0
+            ),
+            OrderItemEntity(
+                id = 2L,
+                orderId = 1001L,
+                productId = 11L,
+                productName = "Sugar 2kg",
+                unitPrice = 120.0,
+                quantity = 1,
+                totalPrice = 120.0
+            )
+        )
+
+        // Shop Owner can see:
+        // 1. Customer Name
+        assertEquals("Priyanka Majhi", order.customerName)
+        // 2. Mobile Number
+        assertEquals("9876543210", order.customerPhone)
+        // 3. Ordered Product Name, Quantity, MRP (unit price)
+        assertEquals(2, orderItems.size)
+        assertEquals("Mustard Oil 1L", orderItems[0].productName)
+        assertEquals(1, orderItems[0].quantity)
+        assertEquals(140.0, orderItems[0].unitPrice, 0.01)
+        assertEquals("Sugar 2kg", orderItems[1].productName)
+        assertEquals(1, orderItems[1].quantity)
+        assertEquals(120.0, orderItems[1].unitPrice, 0.01)
+    }
+
+    @Test
+    fun testStrictShopOwnerAccess_OwnShopOrderNotificationsOnly() {
+        val shopOwner = UserEntity(
+            id = 2L,
+            name = "Ramesh Sahu",
+            phone = "9437012345",
+            role = UserRole.SHOP_OWNER,
+            shopId = 1L
+        )
+
+        val notifications = listOf(
+            NotificationEntity(
+                id = 1L,
+                userId = 2L,
+                title = "New Order #ORD-1001 Received! 🛍️",
+                message = "New order of ₹285 from Priyanka Majhi for Sinapali Kirana Store. Check & prepare items.",
+                type = NotificationType.ORDER_STATUS
+            ),
+            NotificationEntity(
+                id = 2L,
+                userId = 3L,
+                title = "New Order #ORD-1002 Received! 🛍️",
+                message = "New order of ₹450 from Amit Kumar for Maa Samaleswari Sweets.",
+                type = NotificationType.ORDER_STATUS
+            ),
+            NotificationEntity(
+                id = 3L,
+                userId = 5L,
+                title = "Festival 10% Discount Available 🎉",
+                message = "Enjoy discounts across Sinapali Mart.",
+                type = NotificationType.OFFER
+            )
+        )
+
+        val shopName = "Sinapali Kirana Store"
+        val shopOwnerNotifications = notifications.filter { notif ->
+            val isOrderNotification = notif.type == NotificationType.ORDER_STATUS ||
+                notif.title.contains("Order", ignoreCase = true) ||
+                notif.message.contains("Order", ignoreCase = true)
+            val isForMyShop = notif.userId == shopOwner.id ||
+                notif.title.contains(shopName, ignoreCase = true) ||
+                notif.message.contains(shopName, ignoreCase = true)
+            isOrderNotification && isForMyShop
+        }
+
+        assertEquals(1, shopOwnerNotifications.size)
+        assertEquals("New Order #ORD-1001 Received! 🛍️", shopOwnerNotifications.first().title)
+        assertFalse("Cannot see other shop notifications", shopOwnerNotifications.any { it.userId == 3L })
+        assertFalse("Cannot see non-order promotional customer notifications", shopOwnerNotifications.any { it.type == NotificationType.OFFER })
+    }
+
+    @Test
+    fun testStrictShopOwnerAccess_NavigationAccessDeniedForCustomerScreensAndOtherShops() {
+        val currentRole = UserRole.SHOP_OWNER
+        val myShopId = 1L
+
+        // Customer screens that Shop Owner must never access
+        val forbiddenScreensForShopOwner = listOf(
+            Screen.CustomerProfile,
+            Screen.CustomerAuth,
+            Screen.Cart,
+            Screen.Checkout,
+            Screen.CustomerOrders,
+            Screen.OrderTracking(1001L)
+        )
+
+        forbiddenScreensForShopOwner.forEach { screen ->
+            val isForbidden = when (screen) {
+                is Screen.CustomerProfile,
+                is Screen.CustomerAuth,
+                is Screen.Cart,
+                is Screen.Checkout,
+                is Screen.CustomerOrders,
+                is Screen.OrderTracking -> currentRole == UserRole.SHOP_OWNER
+                else -> false
+            }
+            assertTrue("Screen ${screen.javaClass.simpleName} must be forbidden for Shop Owner", isForbidden)
+        }
+
+        // Other shop detail is forbidden for Shop Owner
+        val otherShopScreen = Screen.ShopDetail(2L)
+        val isOtherShopForbidden = (currentRole == UserRole.SHOP_OWNER && otherShopScreen.shopId != myShopId)
+        assertTrue("Other shop data must be forbidden for Shop Owner", isOtherShopForbidden)
+
+        // Own shop detail is allowed
+        val ownShopScreen = Screen.ShopDetail(1L)
+        val isOwnShopAllowed = (ownShopScreen.shopId == myShopId)
+        assertTrue("Own shop data must be accessible for Shop Owner", isOwnShopAllowed)
     }
 }

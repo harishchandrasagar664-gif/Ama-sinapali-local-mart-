@@ -34,6 +34,7 @@ import com.example.data.local.entities.ShopEntity
 import com.example.domain.model.AppLanguage
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.ProductCard
+import com.example.ui.components.ProductImage
 import com.example.ui.components.UserAvatar
 import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
@@ -220,8 +221,12 @@ fun CustomerHomeScreen(
                             color = LocalTextSecondary
                         )
                     }
+                    val isCustomerActive = viewModel.authManager.isCustomerSessionActive() || (user?.isVerified == true && user?.id != null)
                     TextButton(
-                        onClick = { viewModel.navigateTo(Screen.CustomerProfile) },
+                        onClick = {
+                            if (isCustomerActive) viewModel.navigateTo(Screen.CustomerProfile)
+                            else viewModel.navigateTo(Screen.CustomerAuth)
+                        },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
                         if (!user?.profilePhotoUri.isNullOrBlank()) {
@@ -239,7 +244,7 @@ fun CustomerHomeScreen(
                         }
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            if (user?.isVerified == true) s.verifiedBadge else s.loginOtp,
+                            if (isCustomerActive) s.verifiedBadge else s.loginOtp,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -592,7 +597,7 @@ fun CategoriesScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.allCategoriesTitle) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
@@ -674,7 +679,7 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(shop?.name ?: s.shopDetails) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
@@ -717,9 +722,15 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            ProductImage(
+                                imageUrl = prod.imageUrl,
+                                contentDescription = prod.name,
+                                modifier = Modifier.size(56.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(prod.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                                 Text("₹${prod.price.toInt()} per ${prod.unit}", color = LocalTealPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
@@ -752,7 +763,7 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(product?.name ?: s.productDetails) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
@@ -766,15 +777,14 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
                     .padding(padding)
                     .padding(16.dp)
             ) {
-                Box(
+                ProductImage(
+                    imageUrl = product.imageUrl,
+                    contentDescription = product.name,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp)
-                        .background(Color(0xFFE2E8F0), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.ShoppingBag, contentDescription = null, modifier = Modifier.size(64.dp), tint = LocalTealPrimary)
-                }
+                        .height(220.dp),
+                    shape = RoundedCornerShape(12.dp)
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(product.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 Text(product.category, color = LocalTextSecondary, fontSize = 14.sp)

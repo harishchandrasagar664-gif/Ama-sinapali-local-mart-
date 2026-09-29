@@ -33,6 +33,7 @@ import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
+import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.launch
 
 @Composable
@@ -46,7 +47,14 @@ fun CustomerAuthScreen(
     val otpCode by viewModel.otpCode.collectAsState()
     val authError by viewModel.authErrorMessage.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
+    val currentUser by viewModel.currentUser.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+    val isSessionActive = viewModel.authManager.isCustomerSessionActive() && (currentUser?.isVerified == true)
+
+    BackHandler {
+        viewModel.resetCustomerOtpState()
+        viewModel.navigateBack()
+    }
 
     var authMode by remember { mutableStateOf(AuthMode.LOGIN) }
     var useEmail by remember { mutableStateOf(false) }
@@ -83,7 +91,7 @@ fun CustomerAuthScreen(
                     IconButton(
                         onClick = {
                             viewModel.resetCustomerOtpState()
-                            viewModel.navigateTo(Screen.CustomerHome)
+                            viewModel.navigateBack()
                         }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
@@ -143,6 +151,45 @@ fun CustomerAuthScreen(
                                 fontSize = 13.sp,
                                 color = LocalTextSecondary
                             )
+                        }
+                    }
+                }
+            }
+
+            if (isSessionActive && currentUser != null) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = LocalTealPrimary.copy(alpha = 0.12f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Active Session: ${currentUser?.name ?: "Customer"} (${currentUser?.phone ?: ""})",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                            Text(
+                                text = "You are already logged in. Back navigation will keep your session intact, or you may return to the store.",
+                                fontSize = 12.sp,
+                                color = LocalTextSecondary
+                            )
+                            Button(
+                                onClick = { viewModel.navigateBack() },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
+                            ) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Return to Store / Home")
+                            }
                         }
                     }
                 }

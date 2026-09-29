@@ -35,12 +35,17 @@ class MartRepository(private val dao: MartDao) {
             dao.insertOrderItems(SeedData.sampleOrderItems)
             dao.insertReviews(SeedData.sampleReviews)
             dao.insertNotifications(SeedData.sampleNotifications)
+            dao.insertAllPromotions(SeedData.samplePromotions)
         } else {
-            // Ensure full category list and new products are always available
+            // Ensure full category list, promotions and new products are always available
             dao.insertCategories(SeedData.categories)
             val existingProducts = dao.getAllProducts().first()
             if (existingProducts.size < SeedData.products.size) {
                 dao.insertAllProducts(SeedData.products)
+            }
+            val existingPromos = dao.getAllPromotions().first()
+            if (existingPromos.isEmpty()) {
+                dao.insertAllPromotions(SeedData.samplePromotions)
             }
         }
     }
@@ -107,6 +112,7 @@ class MartRepository(private val dao: MartDao) {
     fun getOrderById(orderId: Long): Flow<OrderEntity?> = dao.getOrderById(orderId)
     suspend fun getOrderByIdSync(orderId: Long): OrderEntity? = dao.getOrderByIdSync(orderId)
     fun getOrderItems(orderId: Long): Flow<List<OrderItemEntity>> = dao.getOrderItems(orderId)
+    fun getAllOrderItems(): Flow<List<OrderItemEntity>> = dao.getAllOrderItems()
 
     suspend fun placeOrder(
         customer: UserEntity,
@@ -237,8 +243,31 @@ class MartRepository(private val dao: MartDao) {
 
     fun getAllPromotions(): Flow<List<PromotionEntity>> = dao.getAllPromotions()
     fun getPromotionsByShop(shopId: Long): Flow<List<PromotionEntity>> = dao.getPromotionsByShop(shopId)
+    fun getApprovedPromotions(): Flow<List<PromotionEntity>> = dao.getApprovedPromotions()
     suspend fun createPromotion(promotion: PromotionEntity): Long = dao.insertPromotion(promotion)
+    suspend fun updatePromotion(promotion: PromotionEntity) = dao.updatePromotion(promotion)
     suspend fun updatePromotionStatus(id: Long, status: PromotionStatus) = dao.updatePromotionStatus(id, status)
+    suspend fun updatePromotionDetailsByAdmin(
+        id: Long,
+        status: PromotionStatus,
+        price: Double,
+        duration: Int,
+        startDate: String,
+        endDate: String,
+        location: String,
+        notes: String
+    ) = dao.updatePromotionDetailsByAdmin(
+        id = id,
+        status = status,
+        price = price,
+        duration = duration,
+        startDate = startDate,
+        endDate = endDate,
+        location = location,
+        notes = notes,
+        approvedAt = if (status == PromotionStatus.APPROVED || status == PromotionStatus.ACTIVE) System.currentTimeMillis() else null
+    )
+    suspend fun updatePromotionPaymentStatus(id: Long, paymentStatus: String) = dao.updatePromotionPaymentStatus(id, paymentStatus)
 
     fun getActiveBanners(): Flow<List<BannerEntity>> = dao.getActiveBanners()
 
@@ -247,6 +276,7 @@ class MartRepository(private val dao: MartDao) {
 
     fun getNotifications(userId: Long): Flow<List<NotificationEntity>> = dao.getNotifications(userId)
     fun getAllNotifications(): Flow<List<NotificationEntity>> = dao.getAllNotifications()
+    suspend fun insertNotification(notification: NotificationEntity): Long = dao.insertNotification(notification)
     suspend fun markNotificationRead(id: Long) = dao.markNotificationRead(id)
 
     fun getAllPayments(): Flow<List<PaymentRecordEntity>> = dao.getAllPayments()

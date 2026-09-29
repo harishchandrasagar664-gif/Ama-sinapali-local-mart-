@@ -42,6 +42,11 @@ enum class ComplaintStatus {
 }
 
 enum class PromotionType {
+    PRODUCT_AD,
+    PROMOTIONAL_BANNER,
+    FEATURED_SHOP,
+    LOCATION_BASED,
+    DATE_BASED,
     BANNER,
     FEATURED_PRODUCT,
     DISCOUNT_COUPON

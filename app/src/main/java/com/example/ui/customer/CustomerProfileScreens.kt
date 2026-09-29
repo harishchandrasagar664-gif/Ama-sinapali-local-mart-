@@ -2,6 +2,7 @@
 
 package com.example.ui.customer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,10 +17,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.UserRole
 import com.example.ui.components.ProfilePhotoUploadDialog
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.UserAvatar
@@ -31,47 +34,92 @@ import com.example.ui.viewmodel.Screen
 @Composable
 fun CustomerOrdersScreen(viewModel: MainViewModel) {
     val orders by viewModel.allOrders.collectAsState()
+    val user by viewModel.currentUser.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
+
+    val customerOrders = remember(orders, user) {
+        if (user != null) orders.filter { it.userId == user?.id } else orders
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(s.myOrdersTitle) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(orders) { order ->
+        if (customerOrders.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { viewModel.navigateTo(Screen.OrderTracking(order.id)) },
-                    shape = RoundedCornerShape(12.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("${s.orderNumber}${order.orderNumber}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            StatusBadge(order.status, language = appLanguage)
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ReceiptLong,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = LocalTealPrimary
+                        )
+                        Text(s.myOrdersTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(
+                            "No orders placed yet. Orders you place will appear here.",
+                            fontSize = 13.sp,
+                            color = LocalTextSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                            Text("Start Shopping")
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text("${s.toPay}: ₹${order.finalAmount.toInt()} • ${order.paymentMethod.name.replace('_', ' ')}", fontSize = 13.sp)
-                        Text("${s.deliveredBy}: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}", fontSize = 12.sp, color = LocalTextSecondary)
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(customerOrders) { order ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.navigateTo(Screen.OrderTracking(order.id)) },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("${s.orderNumber}${order.orderNumber}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                StatusBadge(order.status, language = appLanguage)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("${s.toPay}: ₹${order.finalAmount.toInt()} • ${order.paymentMethod.name.replace('_', ' ')}", fontSize = 13.sp)
+                            Text("${s.deliveredBy}: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}", fontSize = 12.sp, color = LocalTextSecondary)
+                        }
                     }
                 }
             }
@@ -85,10 +133,13 @@ fun CustomerProfileScreen(
     onRoleSwitchClick: () -> Unit
 ) {
     val user by viewModel.currentUser.collectAsState()
+    val currentRole by viewModel.currentRole.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
     var showEditAddressDialog by remember { mutableStateOf(false) }
     var showDpDialog by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
+    val isSessionActive = viewModel.authManager.isCustomerSessionActive() || (user?.isVerified == true && user?.id != null)
 
     var editDistrict by remember(user) { mutableStateOf(user?.district ?: "Nuapada") }
     var editBlock by remember(user) { mutableStateOf(user?.block ?: "Sinapali") }
@@ -101,7 +152,7 @@ fun CustomerProfileScreen(
             TopAppBar(
                 title = { Text(s.profileTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerHome) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
@@ -139,7 +190,7 @@ fun CustomerProfileScreen(
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        if (user?.isVerified == true) (if (appLanguage == AppLanguage.ODIA) "ଯାଞ୍ଚ ହୋଇଥିବା ଗ୍ରାହକ (OTP)" else "Verified Customer (OTP)") else (if (appLanguage == AppLanguage.ODIA) "ପଞ୍ଜୀକୃତ ଉପଭୋକ୍ତା" else "Registered User"),
+                                        if (isSessionActive) (if (appLanguage == AppLanguage.ODIA) "ସକ୍ରିୟ ଗ୍ରାହକ ସେସନ୍ (OTP ଯାଞ୍ଚ)" else "Active Customer (OTP Verified)") else (if (appLanguage == AppLanguage.ODIA) "ପଞ୍ଜୀକୃତ ଉପଭୋକ୍ତା" else "Registered User"),
                                         fontSize = 12.sp,
                                         color = LocalSuccess,
                                         fontWeight = FontWeight.SemiBold
@@ -308,15 +359,44 @@ fun CustomerProfileScreen(
             // Account Actions
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
-                    ) {
-                        Icon(Icons.Default.PhoneAndroid, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(s.loginRegisterWithOtp, fontWeight = FontWeight.Bold)
+                    if (isSessionActive) {
+                        // Explicit Logout Button when logged in
+                        Button(
+                            onClick = { showLogoutDialog = true },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_logout_customer"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(Icons.Default.Logout, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(s.logoutBtn, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Option to switch account
+                        OutlinedButton(
+                            onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_switch_account"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (appLanguage == AppLanguage.ODIA) "ଅନ୍ୟ ନମ୍ବର ସହିତ ଲଗଇନ୍ କରନ୍ତୁ" else "Switch / Re-login with different mobile", fontSize = 13.sp)
+                        }
+                    } else {
+                        // Customer Login / Register with OTP
+                        Button(
+                            onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_login_customer"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
+                        ) {
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(s.loginRegisterWithOtp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     Button(
@@ -325,9 +405,12 @@ fun CustomerProfileScreen(
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = LocalAmberSecondary, contentColor = Color.Black)
                     ) {
-                        Icon(Icons.Default.SwapHoriz, contentDescription = null)
+                        Icon(Icons.Default.Shield, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(s.switchPortalMenu, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (currentRole == UserRole.CUSTOMER) "Staff & Merchant Access (Restricted)" else s.switchPortalMenu,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     OutlinedButton(
@@ -485,6 +568,31 @@ fun CustomerProfileScreen(
                 }
             )
         }
+
+        if (showLogoutDialog) {
+            AlertDialog(
+                onDismissRequest = { showLogoutDialog = false },
+                icon = { Icon(Icons.Default.Logout, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                title = { Text(s.logoutConfirmTitle, fontWeight = FontWeight.Bold) },
+                text = { Text(s.logoutConfirmMessage) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showLogoutDialog = false
+                            viewModel.logoutCustomer()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text(s.logoutBtn)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showLogoutDialog = false }) {
+                        Text(s.cancelBtn)
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -500,7 +608,7 @@ fun CustomerHelpScreen(viewModel: MainViewModel) {
             TopAppBar(
                 title = { Text(s.helpComplaintMenu) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.navigateTo(Screen.CustomerProfile) }) {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = s.back)
                     }
                 }
