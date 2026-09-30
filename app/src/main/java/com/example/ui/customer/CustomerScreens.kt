@@ -30,8 +30,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.entities.ProductEntity
+import com.example.data.local.entities.PromotionEntity
 import com.example.data.local.entities.ShopEntity
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.PromotionStatus
+import com.example.domain.model.PromotionType
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.ProductCard
 import com.example.ui.components.ProductImage
@@ -95,9 +98,24 @@ fun CustomerHomeScreen(
     val products by viewModel.activeProducts.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val banners by viewModel.banners.collectAsState()
+    val approvedPromotions by viewModel.approvedPromotions.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedCat by viewModel.selectedCategory.collectAsState()
     val cartItems by viewModel.cartItems.collectAsState()
+
+    val approvedBanners = remember(approvedPromotions) {
+        approvedPromotions.filter { it.type == PromotionType.PROMOTIONAL_BANNER || it.type == PromotionType.BANNER }
+    }
+    val approvedFeaturedShops = remember(approvedPromotions, shops) {
+        val featuredPromoShopIds = approvedPromotions.filter { it.type == PromotionType.FEATURED_SHOP }.map { it.shopId }.toSet()
+        shops.filter { featuredPromoShopIds.contains(it.id) }
+    }
+    val approvedProductAds = remember(approvedPromotions) {
+        approvedPromotions.filter { it.type == PromotionType.PRODUCT_AD || it.type == PromotionType.FEATURED_PRODUCT }
+    }
+    val approvedAreaOffers = remember(approvedPromotions) {
+        approvedPromotions.filter { it.type == PromotionType.LOCATION_BASED || it.type == PromotionType.DATE_BASED }
+    }
 
     val matchingShops = remember(shops, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -312,19 +330,77 @@ fun CustomerHomeScreen(
                 }
             }
 
-            // Banners
+            // Banners (System Banners + Admin-Approved Shop Promotional Banners)
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // 1. Admin-Approved Shop Promotional Banners
+                    items(approvedBanners) { promo ->
+                        Card(
+                            modifier = Modifier
+                                .width(280.dp)
+                                .height(115.dp)
+                                .clickable {
+                                    if (promo.shopId > 0) {
+                                        viewModel.navigateTo(Screen.ShopDetail(promo.shopId))
+                                    }
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = LocalTealDark)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        color = LocalAmberSecondary,
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            "📢 ${promo.shopName.ifBlank { "Promoted" }}",
+                                            color = Color.Black,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Text(
+                                        "📍 ${promo.location}",
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    promo.title,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    promo.description,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 11.sp,
+                                    maxLines = 2
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. Default System Banners
                     items(banners) { b ->
                         Card(
                             modifier = Modifier
                                 .width(280.dp)
-                                .height(110.dp),
+                                .height(115.dp),
                             shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = LocalTealDark)
+                            colors = CardDefaults.cardColors(containerColor = LocalTealPrimary)
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Surface(
@@ -342,6 +418,276 @@ fun CustomerHomeScreen(
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(b.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 Text(b.subtitle, color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Admin-Approved Featured Shops
+            if (approvedFeaturedShops.isNotEmpty()) {
+                item {
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("⭐", fontSize = 16.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Featured Sinapali Shops",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = LocalTealDark
+                                )
+                            }
+                            Surface(
+                                color = LocalAmberSecondary.copy(alpha = 0.25f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    "Admin Verified",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = LocalAmberDark,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(approvedFeaturedShops) { shop ->
+                                Card(
+                                    modifier = Modifier
+                                        .width(220.dp)
+                                        .clickable { viewModel.navigateTo(Screen.ShopDetail(shop.id)) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = androidx.compose.foundation.BorderStroke(1.5.dp, LocalAmberDark),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                color = LocalAmberSecondary,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    "⭐ FEATURED",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = Color.Black,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Text("📍 ${shop.address}", fontSize = 10.sp, color = LocalTextSecondary, maxLines = 1)
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(shop.name, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+                                        Text(shop.category, fontSize = 11.sp, color = LocalTextSecondary, maxLines = 1)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "Visit Featured Shop →",
+                                            color = LocalTealPrimary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Admin-Approved Product Ads (Spotlight Sponsored Deals)
+            if (approvedProductAds.isNotEmpty()) {
+                item {
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Campaign, contentDescription = null, tint = LocalTealPrimary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Spotlight Deals & Product Ads",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = LocalTealDark
+                                )
+                            }
+                            Surface(
+                                color = LocalTealPrimary.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    "Sponsored",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = LocalTealPrimary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(approvedProductAds) { ad ->
+                                Card(
+                                    modifier = Modifier
+                                        .width(240.dp)
+                                        .clickable {
+                                            if (ad.targetProductId != null && ad.targetProductId > 0) {
+                                                viewModel.navigateTo(Screen.ProductDetail(ad.targetProductId))
+                                            } else if (ad.shopId > 0) {
+                                                viewModel.navigateTo(Screen.ShopDetail(ad.shopId))
+                                            }
+                                        },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, LocalTealPrimary.copy(alpha = 0.5f)),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                color = LocalTealPrimary,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    "SPONSORED AD",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Text("📍 ${ad.location}", fontSize = 10.sp, color = LocalTextSecondary)
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            ad.targetProductName ?: ad.title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            "By ${ad.shopName}",
+                                            fontSize = 11.sp,
+                                            color = LocalTextSecondary,
+                                            maxLines = 1
+                                        )
+                                        if (ad.description.isNotBlank()) {
+                                            Text(
+                                                ad.description,
+                                                fontSize = 11.sp,
+                                                color = LocalTealDark,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "View Deal Details →",
+                                            color = LocalTealPrimary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Admin-Approved Location & Date-Based Promotions
+            if (approvedAreaOffers.isNotEmpty()) {
+                item {
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("📍", fontSize = 16.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Sinapali Area & Festival Offers",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = LocalTealDark
+                                )
+                            }
+                        }
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(approvedAreaOffers) { offer ->
+                                Card(
+                                    modifier = Modifier
+                                        .width(260.dp)
+                                        .clickable {
+                                            if (offer.shopId > 0) {
+                                                viewModel.navigateTo(Screen.ShopDetail(offer.shopId))
+                                            }
+                                        },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                color = if (offer.type == PromotionType.LOCATION_BASED) LocalTealPrimary else LocalAmberDark,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    if (offer.type == PromotionType.LOCATION_BASED) "📍 ${offer.location}" else "📅 FESTIVAL SPECIAL",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            if (offer.endDate.isNotBlank()) {
+                                                Text("Till ${offer.endDate}", fontSize = 10.sp, color = LocalTextSecondary)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(offer.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+                                        Text(offer.description, fontSize = 11.sp, color = LocalTextSecondary, maxLines = 2)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text("Offered by: ${offer.shopName}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = LocalTealPrimary)
+                                    }
+                                }
                             }
                         }
                     }

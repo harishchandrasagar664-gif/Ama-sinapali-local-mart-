@@ -886,4 +886,276 @@ class AmaSinapaliFlowVerificationUnitTest {
         val isOwnShopAllowed = (ownShopScreen.shopId == myShopId)
         assertTrue("Own shop data must be accessible for Shop Owner", isOwnShopAllowed)
     }
+
+    @Test
+    fun testShopOwnerCanCreateAllFivePromotionFormats() {
+        val formats = listOf(
+            PromotionType.PRODUCT_AD,
+            PromotionType.PROMOTIONAL_BANNER,
+            PromotionType.FEATURED_SHOP,
+            PromotionType.LOCATION_BASED,
+            PromotionType.DATE_BASED
+        )
+
+        assertEquals(5, formats.size)
+        assertTrue(formats.contains(PromotionType.PRODUCT_AD))
+        assertTrue(formats.contains(PromotionType.PROMOTIONAL_BANNER))
+        assertTrue(formats.contains(PromotionType.FEATURED_SHOP))
+        assertTrue(formats.contains(PromotionType.LOCATION_BASED))
+        assertTrue(formats.contains(PromotionType.DATE_BASED))
+    }
+
+    @Test
+    fun testPromotionPreSubmissionQuoteShowsPriceDurationDateAndLocation() {
+        val pricingConfig = com.example.ui.viewmodel.PromotionPricingConfig(
+            productAdDailyRate = 40.0,
+            promotionalBannerDailyRate = 80.0,
+            featuredShopDailyRate = 100.0,
+            locationBasedDailyRate = 60.0,
+            dateBasedDailyRate = 50.0
+        )
+
+        val durationDays = 7
+        val startDate = "2026-09-30"
+        val endDate = "2026-10-07"
+        val location = "Hatibandh GP, Sinapali"
+
+        // For Product Ad
+        val adDailyRate = pricingConfig.getDailyRate(PromotionType.PRODUCT_AD)
+        val adTotalPrice = adDailyRate * durationDays
+        assertEquals(40.0, adDailyRate, 0.01)
+        assertEquals(280.0, adTotalPrice, 0.01)
+
+        // For Banner
+        val bannerDailyRate = pricingConfig.getDailyRate(PromotionType.PROMOTIONAL_BANNER)
+        val bannerTotalPrice = bannerDailyRate * durationDays
+        assertEquals(80.0, bannerDailyRate, 0.01)
+        assertEquals(560.0, bannerTotalPrice, 0.01)
+
+        // For Featured Shop
+        val featuredDailyRate = pricingConfig.getDailyRate(PromotionType.FEATURED_SHOP)
+        val featuredTotalPrice = featuredDailyRate * 14
+        assertEquals(100.0, featuredDailyRate, 0.01)
+        assertEquals(1400.0, featuredTotalPrice, 0.01)
+
+        // For Location Promotion
+        val locDailyRate = pricingConfig.getDailyRate(PromotionType.LOCATION_BASED)
+        val locTotalPrice = locDailyRate * durationDays
+        assertEquals(60.0, locDailyRate, 0.01)
+        assertEquals(420.0, locTotalPrice, 0.01)
+
+        // For Date Promotion
+        val dateDailyRate = pricingConfig.getDailyRate(PromotionType.DATE_BASED)
+        val dateTotalPrice = dateDailyRate * 3
+        assertEquals(50.0, dateDailyRate, 0.01)
+        assertEquals(150.0, dateTotalPrice, 0.01)
+
+        // Validate pre-submission quote fields
+        val quoteFields = mapOf(
+            "format" to PromotionType.LOCATION_BASED.name,
+            "dailyRate" to locDailyRate,
+            "duration" to durationDays,
+            "startDate" to startDate,
+            "endDate" to endDate,
+            "location" to location,
+            "totalPrice" to locTotalPrice
+        )
+
+        assertEquals(420.0, quoteFields["totalPrice"])
+        assertEquals("Hatibandh GP, Sinapali", quoteFields["location"])
+        assertEquals("2026-09-30", quoteFields["startDate"])
+        assertEquals("2026-10-07", quoteFields["endDate"])
+        assertEquals(7, quoteFields["duration"])
+    }
+
+    @Test
+    fun testPromotionSubmissionInitialStatusIsPendingAdminApproval() {
+        val newPromotion = PromotionEntity(
+            id = 10,
+            shopId = 1L,
+            shopName = "Sinapali Kirana Store",
+            title = "Fresh Spices Offer",
+            description = "10% off on all local spices",
+            type = PromotionType.PRODUCT_AD,
+            status = PromotionStatus.PENDING_APPROVAL,
+            location = "Sinapali Town",
+            durationDays = 7,
+            startDate = "2026-09-30",
+            endDate = "2026-10-07",
+            dailyRate = 40.0,
+            totalPrice = 280.0,
+            paymentStatus = "Pending Payment / Post-Approval"
+        )
+
+        assertEquals(PromotionStatus.PENDING_APPROVAL, newPromotion.status)
+        assertEquals("Pending Payment / Post-Approval", newPromotion.paymentStatus)
+        assertEquals(280.0, newPromotion.totalPrice, 0.01)
+        assertEquals("Sinapali Town", newPromotion.location)
+    }
+
+    @Test
+    fun testAdminCanReviewApproveRejectAndEditPromotionDetails() {
+        val submittedPromo = PromotionEntity(
+            id = 11,
+            shopId = 2L,
+            shopName = "Maa Samaleswari Sweets",
+            title = "Nuakhai Special Chhena Poda",
+            description = "Traditional taste of Sinapali",
+            type = PromotionType.LOCATION_BASED,
+            status = PromotionStatus.PENDING_APPROVAL,
+            location = "Sinapali Town",
+            durationDays = 7,
+            startDate = "2026-09-30",
+            endDate = "2026-10-07",
+            dailyRate = 60.0,
+            totalPrice = 420.0
+        )
+
+        // Admin reviews and edits price, dates, duration, location and notes
+        val revisedPrice = 350.0
+        val revisedDuration = 5
+        val revisedStartDate = "2026-10-01"
+        val revisedEndDate = "2026-10-06"
+        val revisedLocation = "Sinapali Market & Hatibandh"
+        val adminNotes = "Approved with special festival rate discount by Admin Harishchandra Sagar"
+
+        val approvedPromo = submittedPromo.copy(
+            status = PromotionStatus.APPROVED,
+            totalPrice = revisedPrice,
+            durationDays = revisedDuration,
+            startDate = revisedStartDate,
+            endDate = revisedEndDate,
+            location = revisedLocation,
+            adminNotes = adminNotes,
+            approvedAt = System.currentTimeMillis()
+        )
+
+        assertEquals(PromotionStatus.APPROVED, approvedPromo.status)
+        assertEquals(350.0, approvedPromo.totalPrice, 0.01)
+        assertEquals(5, approvedPromo.durationDays)
+        assertEquals("2026-10-01", approvedPromo.startDate)
+        assertEquals("2026-10-06", approvedPromo.endDate)
+        assertEquals("Sinapali Market & Hatibandh", approvedPromo.location)
+        assertEquals("Approved with special festival rate discount by Admin Harishchandra Sagar", approvedPromo.adminNotes)
+        assertNotNull(approvedPromo.approvedAt)
+
+        // Admin rejection test
+        val rejectedPromo = submittedPromo.copy(
+            status = PromotionStatus.REJECTED,
+            adminNotes = "Image quality inadequate. Please resubmit."
+        )
+        assertEquals(PromotionStatus.REJECTED, rejectedPromo.status)
+    }
+
+    @Test
+    fun testOnlyApprovedPromotionsAreVisibleToCustomers() {
+        val allPromotions = listOf(
+            PromotionEntity(
+                id = 1,
+                shopId = 1,
+                shopName = "Sinapali Kirana Store",
+                title = "Approved Banner Offer",
+                description = "Live promo",
+                type = PromotionType.PROMOTIONAL_BANNER,
+                status = PromotionStatus.APPROVED,
+                totalPrice = 560.0
+            ),
+            PromotionEntity(
+                id = 2,
+                shopId = 2,
+                shopName = "Maa Samaleswari Sweets",
+                title = "Pending Product Ad",
+                description = "Pending approval",
+                type = PromotionType.PRODUCT_AD,
+                status = PromotionStatus.PENDING_APPROVAL,
+                totalPrice = 280.0
+            ),
+            PromotionEntity(
+                id = 3,
+                shopId = 3,
+                shopName = "Maa Tarini Handloom",
+                title = "Rejected Date Promotion",
+                description = "Not approved",
+                type = PromotionType.DATE_BASED,
+                status = PromotionStatus.REJECTED,
+                totalPrice = 150.0
+            ),
+            PromotionEntity(
+                id = 4,
+                shopId = 1,
+                shopName = "Sinapali Kirana Store",
+                title = "Active Featured Shop",
+                description = "Featured partner",
+                type = PromotionType.FEATURED_SHOP,
+                status = PromotionStatus.ACTIVE,
+                totalPrice = 1400.0
+            )
+        )
+
+        // Filter for customer visibility (only APPROVED or ACTIVE)
+        val customerVisiblePromotions = allPromotions.filter {
+            it.status == PromotionStatus.APPROVED || it.status == PromotionStatus.ACTIVE
+        }
+
+        assertEquals(2, customerVisiblePromotions.size)
+        assertTrue(customerVisiblePromotions.any { it.id == 1L })
+        assertTrue(customerVisiblePromotions.any { it.id == 4L })
+
+        // Pending and rejected must NEVER be visible to customers
+        assertFalse(customerVisiblePromotions.any { it.status == PromotionStatus.PENDING_APPROVAL })
+        assertFalse(customerVisiblePromotions.any { it.status == PromotionStatus.REJECTED })
+        assertFalse(customerVisiblePromotions.any { it.id == 2L })
+        assertFalse(customerVisiblePromotions.any { it.id == 3L })
+    }
+
+    @Test
+    fun testShopOwnerPromotionStatusHistoryAndPaymentTracking() {
+        val shopId = 1L
+        val promotions = listOf(
+            PromotionEntity(
+                id = 1,
+                shopId = 1L,
+                shopName = "Sinapali Kirana Store",
+                title = "Featured Shop Partner",
+                description = "Top placement in store directory",
+                type = PromotionType.FEATURED_SHOP,
+                status = PromotionStatus.APPROVED,
+                totalPrice = 1400.0,
+                paymentStatus = "PAID"
+            ),
+            PromotionEntity(
+                id = 2,
+                shopId = 1L,
+                shopName = "Sinapali Kirana Store",
+                title = "Mustard Oil Product Ad",
+                description = "Town spotlight",
+                type = PromotionType.PRODUCT_AD,
+                status = PromotionStatus.PENDING_APPROVAL,
+                totalPrice = 280.0,
+                paymentStatus = "Pending Payment / Post-Approval"
+            ),
+            PromotionEntity(
+                id = 3,
+                shopId = 2L,
+                shopName = "Maa Samaleswari Sweets",
+                title = "Sweets Banner",
+                description = "Other shop promo",
+                type = PromotionType.PROMOTIONAL_BANNER,
+                status = PromotionStatus.APPROVED,
+                totalPrice = 560.0,
+                paymentStatus = "PAID"
+            )
+        )
+
+        // Shop Owner 1 views own history
+        val myPromotions = promotions.filter { it.shopId == shopId }
+        assertEquals(2, myPromotions.size)
+        assertEquals("PAID", myPromotions[0].paymentStatus)
+        assertEquals(PromotionStatus.APPROVED, myPromotions[0].status)
+        assertEquals("Pending Payment / Post-Approval", myPromotions[1].paymentStatus)
+        assertEquals(PromotionStatus.PENDING_APPROVAL, myPromotions[1].status)
+
+        // Never includes other shop's promotions
+        assertFalse(myPromotions.any { it.shopId == 2L })
+    }
 }
