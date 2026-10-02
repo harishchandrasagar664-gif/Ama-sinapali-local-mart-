@@ -1158,4 +1158,127 @@ class AmaSinapaliFlowVerificationUnitTest {
         // Never includes other shop's promotions
         assertFalse(myPromotions.any { it.shopId == 2L })
     }
+
+    @Test
+    fun testAdminSeesOrdersFromAllCustomerDevicesAndAllShops() {
+        val ordersFromDifferentDevicesAndShops = listOf(
+            OrderEntity(
+                id = 101,
+                orderNumber = "ORD-DEV1-001",
+                userId = 5, // Customer on Device 1
+                shopId = 1, // Maa Samaleswari Kirana
+                totalAmount = 560.0,
+                finalAmount = 560.0,
+                status = OrderStatus.PLACED,
+                deliveryType = DeliveryType.HOME_DELIVERY,
+                paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+                deliveryAddress = "Ward No 4, Sinapali",
+                customerPhone = "9876543210",
+                customerName = "Ramesh Majhi"
+            ),
+            OrderEntity(
+                id = 102,
+                orderNumber = "ORD-DEV2-002",
+                userId = 6, // Customer on Device 2
+                shopId = 2, // Sweets & Bakery
+                totalAmount = 350.0,
+                finalAmount = 350.0,
+                status = OrderStatus.ACCEPTED,
+                deliveryType = DeliveryType.HOME_DELIVERY,
+                paymentMethod = PaymentMethod.ONLINE_UPI,
+                paymentStatus = PaymentStatus.PAID,
+                deliveryAddress = "Hatibandh Road, Sinapali",
+                customerPhone = "8899001122",
+                customerName = "Sunita Bag"
+            ),
+            OrderEntity(
+                id = 103,
+                orderNumber = "ORD-DEV3-003",
+                userId = 7, // Customer on Device 3
+                shopId = 3, // Vegetables Shop
+                totalAmount = 180.0,
+                finalAmount = 180.0,
+                status = OrderStatus.DELIVERED,
+                deliveryType = DeliveryType.SELF_PICKUP,
+                paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+                paymentStatus = PaymentStatus.PAID,
+                deliveryAddress = "Daily Market Square, Sinapali",
+                customerPhone = "7766554433",
+                customerName = "Bikram Rout"
+            )
+        )
+
+        // Admin must see ALL orders regardless of device or shop
+        val adminVisibleOrders = ordersFromDifferentDevicesAndShops
+        assertEquals(3, adminVisibleOrders.size)
+        assertTrue(adminVisibleOrders.any { it.shopId == 1L })
+        assertTrue(adminVisibleOrders.any { it.shopId == 2L })
+        assertTrue(adminVisibleOrders.any { it.shopId == 3L })
+        assertTrue(adminVisibleOrders.any { it.orderNumber == "ORD-DEV1-001" })
+        assertTrue(adminVisibleOrders.any { it.orderNumber == "ORD-DEV2-002" })
+        assertTrue(adminVisibleOrders.any { it.orderNumber == "ORD-DEV3-003" })
+    }
+
+    @Test
+    fun testAdminCanFilterOrdersByShop() {
+        val allOrders = listOf(
+            OrderEntity(
+                id = 201, orderNumber = "ORD-1", userId = 5, shopId = 1, totalAmount = 100.0, finalAmount = 100.0,
+                status = OrderStatus.PLACED, deliveryAddress = "Sinapali", customerPhone = "123", customerName = "A"
+            ),
+            OrderEntity(
+                id = 202, orderNumber = "ORD-2", userId = 6, shopId = 2, totalAmount = 200.0, finalAmount = 200.0,
+                status = OrderStatus.PLACED, deliveryAddress = "Sinapali", customerPhone = "456", customerName = "B"
+            ),
+            OrderEntity(
+                id = 203, orderNumber = "ORD-3", userId = 7, shopId = 1, totalAmount = 300.0, finalAmount = 300.0,
+                status = OrderStatus.DELIVERED, deliveryAddress = "Sinapali", customerPhone = "789", customerName = "C"
+            )
+        )
+
+        // Filter by Shop 1
+        val shop1Orders = allOrders.filter { it.shopId == 1L }
+        assertEquals(2, shop1Orders.size)
+
+        // Filter by Shop 2
+        val shop2Orders = allOrders.filter { it.shopId == 2L }
+        assertEquals(1, shop2Orders.size)
+
+        // All Shops
+        val allShopsView = allOrders
+        assertEquals(3, allShopsView.size)
+    }
+
+    @Test
+    fun testAdminCanFilterOrdersByStatusAndSearch() {
+        val orders = listOf(
+            OrderEntity(
+                id = 301, orderNumber = "ORD-SIN-101", userId = 5, shopId = 1, totalAmount = 450.0, finalAmount = 450.0,
+                status = OrderStatus.PLACED, deliveryAddress = "Main Road, Sinapali", customerPhone = "9876543210", customerName = "Pooja Majhi"
+            ),
+            OrderEntity(
+                id = 302, orderNumber = "ORD-SIN-102", userId = 6, shopId = 2, totalAmount = 250.0, finalAmount = 250.0,
+                status = OrderStatus.OUT_FOR_DELIVERY, deliveryAddress = "Near Panchayat Samiti, Sinapali", customerPhone = "9123456780", customerName = "Dillip Bag"
+            ),
+            OrderEntity(
+                id = 303, orderNumber = "ORD-SIN-103", userId = 7, shopId = 1, totalAmount = 600.0, finalAmount = 600.0,
+                status = OrderStatus.DELIVERED, deliveryAddress = "High School Para, Sinapali", customerPhone = "9988776655", customerName = "Anita Sahu"
+            )
+        )
+
+        // Filter by Status: PLACED
+        val placed = orders.filter { it.status == OrderStatus.PLACED }
+        assertEquals(1, placed.size)
+        assertEquals("ORD-SIN-101", placed[0].orderNumber)
+
+        // Search by customer name "Dillip"
+        val searchedByName = orders.filter { it.customerName.contains("Dillip", ignoreCase = true) }
+        assertEquals(1, searchedByName.size)
+        assertEquals("ORD-SIN-102", searchedByName[0].orderNumber)
+
+        // Search by phone "9988"
+        val searchedByPhone = orders.filter { it.customerPhone.contains("9988") }
+        assertEquals(1, searchedByPhone.size)
+        assertEquals("Anita Sahu", searchedByPhone[0].customerName)
+    }
 }

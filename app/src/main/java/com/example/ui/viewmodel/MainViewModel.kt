@@ -1,11 +1,14 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
 import com.example.data.local.SeedData
 import com.example.data.local.entities.*
+import com.example.data.firebase.FirestoreSyncService
+import com.example.data.firebase.FirebaseSyncConfig
 import com.example.data.repository.MartRepository
 import com.example.domain.model.*
 import com.example.service.AuthManager
@@ -40,8 +43,87 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val screenBackStack = ArrayDeque<Screen>()
 
+    private val _isOrderSyncing = MutableStateFlow(false)
+    val isOrderSyncing: StateFlow<Boolean> = _isOrderSyncing.asStateFlow()
+
+    private val _lastOrderSyncTime = MutableStateFlow<Long?>(null)
+    val lastOrderSyncTime: StateFlow<Long?> = _lastOrderSyncTime.asStateFlow()
+
+    private val _orderSyncStatusMessage = MutableStateFlow<String?>("Firebase Firestore Connection: Verifying...")
+    val orderSyncStatusMessage: StateFlow<String?> = _orderSyncStatusMessage.asStateFlow()
+
+    private val _firebaseVerificationReport = MutableStateFlow<FirestoreSyncService.FirebaseVerificationReport?>(null)
+    val firebaseVerificationReport: StateFlow<FirestoreSyncService.FirebaseVerificationReport?> = _firebaseVerificationReport.asStateFlow()
+
+    private val _isVerifyingFirebase = MutableStateFlow(false)
+    val isVerifyingFirebase: StateFlow<Boolean> = _isVerifyingFirebase.asStateFlow()
+
     init {
+        try {
+            val prefs = application.getSharedPreferences("firebase_prefs", Context.MODE_PRIVATE)
+            val savedProjectId = prefs.getString("firebase_project_id", null)
+            if (!savedProjectId.isNullOrBlank()) {
+                FirebaseSyncConfig.FIREBASE_PROJECT_ID = savedProjectId.trim()
+            }
+        } catch (_: Throwable) { }
         authManager.restoreSession(viewModelScope)
+        verifyFirebaseConnection()
+        syncOrdersFromCloud()
+        startPeriodicOrderSync()
+    }
+
+    fun verifyFirebaseConnection() {
+        viewModelScope.launch {
+            _isVerifyingFirebase.value = true
+            try {
+                val report = FirestoreSyncService.verifyFirebaseConnection()
+                _firebaseVerificationReport.value = report
+                _orderSyncStatusMessage.value = report.statusMessage
+            } catch (e: Throwable) {
+                // Ignore
+            } finally {
+                _isVerifyingFirebase.value = false
+            }
+        }
+    }
+
+    fun setFirebaseProjectId(newProjectId: String) {
+        val cleanId = newProjectId.trim()
+        FirebaseSyncConfig.FIREBASE_PROJECT_ID = cleanId
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("firebase_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putString("firebase_project_id", cleanId).apply()
+        } catch (_: Throwable) { }
+        verifyFirebaseConnection()
+    }
+
+    fun syncOrdersFromCloud() {
+        viewModelScope.launch {
+            _isOrderSyncing.value = true
+            try {
+                val count = repository.syncOrdersFromCloud()
+                _lastOrderSyncTime.value = System.currentTimeMillis()
+                _orderSyncStatusMessage.value = if (count > 0) "Synced $count orders from cloud across all devices ☁️" else "All town orders up to date with cloud ☁️"
+            } catch (e: Throwable) {
+                _orderSyncStatusMessage.value = "Local mode active"
+            } finally {
+                _isOrderSyncing.value = false
+            }
+        }
+    }
+
+    private fun startPeriodicOrderSync() {
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(20000)
+                try {
+                    repository.syncOrdersFromCloud()
+                    _lastOrderSyncTime.value = System.currentTimeMillis()
+                } catch (e: Throwable) {
+                    // Ignore background sync errors
+                }
+            }
+        }
     }
 
     private val _appLanguage = MutableStateFlow<com.example.domain.model.AppLanguage>(com.example.domain.model.AppLanguage.ENGLISH)

@@ -1,8 +1,11 @@
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -20,13 +23,36 @@ android {
         buildConfigField("String", "RAZORPAY_KEY_ID", "\"rzp_test_placeholder\"")
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = rootProject.file("debug.keystore")
+            if (!keystoreFile.exists()) {
+                val b64File = rootProject.file("debug.keystore.base64")
+                if (b64File.exists()) {
+                    val decoded = Base64.getDecoder().decode(b64File.readText().trim())
+                    keystoreFile.writeBytes(decoded)
+                }
+            }
+            storeFile = keystoreFile
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

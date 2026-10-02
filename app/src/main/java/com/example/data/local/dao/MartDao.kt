@@ -139,6 +139,9 @@ interface MartDao {
     @Query("SELECT * FROM orders WHERE id = :id")
     suspend fun getOrderByIdSync(id: Long): OrderEntity?
 
+    @Query("SELECT * FROM orders WHERE orderNumber = :orderNumber LIMIT 1")
+    suspend fun getOrderByOrderNumber(orderNumber: String): OrderEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrder(order: OrderEntity): Long
 

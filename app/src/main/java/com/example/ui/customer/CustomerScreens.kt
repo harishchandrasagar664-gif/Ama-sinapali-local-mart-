@@ -126,10 +126,12 @@ fun CustomerHomeScreen(
     }
 
     val allCategoryList = remember(categories, products) {
+        val shoppingCats = com.example.data.local.SeedData.shoppingCategories
         val catNamesFromDb = categories.map { it.name }
         val catNamesFromProducts = products.map { it.category }
         val defaultList = com.example.data.local.SeedData.defaultCategoryNames
-        (listOf("All") + (catNamesFromDb + catNamesFromProducts + defaultList).distinct()).distinct().filter { it.isNotBlank() }
+        val combined = (shoppingCats + catNamesFromDb + catNamesFromProducts + defaultList).distinct().filter { it.isNotBlank() }
+        listOf("All") + combined
     }
 
     val filteredProducts = remember(products, searchQuery, selectedCat, matchingShops) {
@@ -139,7 +141,7 @@ fun CustomerHomeScreen(
                 p.name.contains(searchQuery, ignoreCase = true) ||
                 p.category.contains(searchQuery, ignoreCase = true) ||
                 matchingShopIds.contains(p.shopId)
-            val matchesCategory = selectedCat.equals("All", ignoreCase = true) || p.category.equals(selectedCat, ignoreCase = true)
+            val matchesCategory = productMatchesCategory(p.category, selectedCat)
             matchesSearch && matchesCategory
         }
     }
@@ -747,7 +749,7 @@ fun CustomerHomeScreen(
                         val isSelected = selectedCat.equals(catName, ignoreCase = true)
                         val displayName = if (catName.equals("All", ignoreCase = true)) s.allCategory else s.getCategoryDisplayName(catName)
                         val emoji = s.getCategoryEmoji(catName)
-                        val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { it.category.equals(catName, ignoreCase = true) }
+                        val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { productMatchesCategory(it.category, catName) }
 
                         Surface(
                             onClick = { viewModel.setSelectedCategory(catName) },
@@ -932,10 +934,12 @@ fun CategoriesScreen(viewModel: MainViewModel) {
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
 
     val allCategoryNames = remember(categories, products) {
+        val shoppingCats = com.example.data.local.SeedData.shoppingCategories
         val fromDb = categories.map { it.name }
         val fromProducts = products.map { it.category }
         val defaultList = com.example.data.local.SeedData.defaultCategoryNames
-        (listOf("All") + (fromDb + fromProducts + defaultList).distinct()).distinct().filter { it.isNotBlank() }
+        val combined = (shoppingCats + fromDb + fromProducts + defaultList).distinct().filter { it.isNotBlank() }
+        listOf("All") + combined
     }
 
     Scaffold(
@@ -960,7 +964,7 @@ fun CategoriesScreen(viewModel: MainViewModel) {
             items(allCategoryNames) { catName ->
                 val displayName = if (catName.equals("All", ignoreCase = true)) s.allCategory else s.getCategoryDisplayName(catName)
                 val emoji = s.getCategoryEmoji(catName)
-                val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { it.category.equals(catName, ignoreCase = true) }
+                val count = if (catName.equals("All", ignoreCase = true)) products.size else products.count { productMatchesCategory(it.category, catName) }
                 val catEntity = categories.find { it.name.equals(catName, ignoreCase = true) }
 
                 Card(
@@ -1162,3 +1166,35 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
         }
     }
 }
+
+fun productMatchesCategory(productCategory: String, selectedCategory: String): Boolean {
+    if (selectedCategory.equals("All", ignoreCase = true)) return true
+    if (productCategory.equals(selectedCategory, ignoreCase = true)) return true
+
+    val normSelected = selectedCategory.trim().lowercase().replace("’", "'")
+    val normProd = productCategory.trim().lowercase().replace("’", "'")
+
+    if (normProd.contains(normSelected)) return true
+
+    return when (normSelected) {
+        "clothing" -> normProd.contains("clothes") || normProd.contains("handloom") || normProd.contains("wear") || normProd.contains("saree")
+        "saree" -> normProd.contains("saree") || normProd.contains("handloom")
+        "chappal" -> normProd.contains("chappal") || normProd.contains("slipper") || normProd.contains("sandals")
+        "shoes" -> normProd.contains("shoe") || normProd.contains("footwear")
+        "cosmetics" -> normProd.contains("cosmetic") || normProd.contains("personal care") || normProd.contains("hygiene") || normProd.contains("beauty")
+        "fancy" -> normProd.contains("fancy") || normProd.contains("gift") || normProd.contains("puja") || normProd.contains("bangle")
+        "bags" -> normProd.contains("bag") || normProd.contains("backpack") || normProd.contains("luggage")
+        "jewellery", "jewelry" -> normProd.contains("jewel") || normProd.contains("ornament") || normProd.contains("necklace") || normProd.contains("bangle")
+        "kids wear" -> normProd.contains("kid") || normProd.contains("baby") || normProd.contains("child")
+        "men's wear", "mens wear" -> normProd.contains("men") || normProd.contains("shirt")
+        "women's wear", "womens wear" -> normProd.contains("women") || normProd.contains("kurti") || normProd.contains("saree")
+        "household items" -> normProd.contains("household") || normProd.contains("home") || normProd.contains("kitchen")
+        "grocery" -> normProd.contains("grocer") || normProd.contains("spice") || normProd.contains("dal") || normProd.contains("rice")
+        "vegetables" -> normProd.contains("vegetable") || normProd.contains("organic")
+        "fruits" -> normProd.contains("fruit")
+        "electronics" -> normProd.contains("electronic") || normProd.contains("mobile") || normProd.contains("device")
+        "other" -> normProd.contains("other") || normProd.contains("paan") || normProd.contains("hardware") || normProd.contains("stationery") || normProd.contains("medicine")
+        else -> false
+    }
+}
+

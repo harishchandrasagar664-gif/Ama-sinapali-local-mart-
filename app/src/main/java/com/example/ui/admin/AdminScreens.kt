@@ -2,10 +2,14 @@
 
 package com.example.ui.admin
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,18 +19,26 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entities.OrderEntity
+import com.example.data.firebase.FirestoreSyncService
+import com.example.data.firebase.FirebaseSyncConfig
+import com.example.domain.model.DeliveryType
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.PaymentMethod
+import com.example.domain.model.PaymentStatus
 import com.example.domain.model.PromotionStatus
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.StatusBadge
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun AdminDashboardScreen(
@@ -309,15 +321,91 @@ fun AdminDeliveryScreen(viewModel: MainViewModel) {
 
 @Composable
 fun AdminOrdersScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val orders by viewModel.allOrders.collectAsState()
+    val shops by viewModel.allShops.collectAsState()
+    val allOrderItems by viewModel.allOrderItems.collectAsState()
+    val isSyncing by viewModel.isOrderSyncing.collectAsState()
+    val lastSyncTime by viewModel.lastOrderSyncTime.collectAsState()
+    val syncStatusMsg by viewModel.orderSyncStatusMessage.collectAsState()
+    val firebaseReport by viewModel.firebaseVerificationReport.collectAsState()
+    val isVerifyingFirebase by viewModel.isVerifyingFirebase.collectAsState()
+
+    var showConfigDialog by remember { mutableStateOf(false) }
+    var inputProjectId by remember { mutableStateOf(com.example.data.firebase.FirebaseSyncConfig.FIREBASE_PROJECT_ID) }
+
+    var selectedShopId by remember { mutableStateOf<Long?>(null) }
+    var selectedStatus by remember { mutableStateOf<OrderStatus?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var statusMenuOrderId by remember { mutableStateOf<Long?>(null) }
+
+    val shopMap = remember(shops) { shops.associateBy { it.id } }
+    val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+
+    // Automatic verification and sync on opening screen
+    LaunchedEffect(Unit) {
+        viewModel.verifyFirebaseConnection()
+        viewModel.syncOrdersFromCloud()
+    }
+
+    // Filter by shop
+    val shopFiltered = remember(orders, selectedShopId) {
+        if (selectedShopId == null) orders else orders.filter { it.shopId == selectedShopId }
+    }
+
+    // Filter by status
+    val statusFiltered = remember(shopFiltered, selectedStatus) {
+        if (selectedStatus == null) shopFiltered else shopFiltered.filter { it.status == selectedStatus }
+    }
+
+    // Filter by search query
+    val finalOrders = remember(statusFiltered, searchQuery, shopMap) {
+        if (searchQuery.isBlank()) {
+            statusFiltered
+        } else {
+            val q = searchQuery.trim().lowercase()
+            statusFiltered.filter { order ->
+                order.orderNumber.lowercase().contains(q) ||
+                order.customerName.lowercase().contains(q) ||
+                order.customerPhone.lowercase().contains(q) ||
+                order.deliveryAddress.lowercase().contains(q) ||
+                (shopMap[order.shopId]?.name?.lowercase()?.contains(q) == true)
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("All Town Orders") },
+                title = {
+                    Column {
+                        Text("All Town Orders", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(
+                            "${finalOrders.size} of ${orders.size} orders across Sinapali",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.navigateTo(Screen.AdminDashboard) }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.syncOrdersFromCloud() },
+                        enabled = !isSyncing
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = LocalTealPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = "Sync orders from cloud")
+                        }
                     }
                 }
             )
@@ -327,20 +415,560 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(orders) { order ->
-                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Order #${order.orderNumber}", fontWeight = FontWeight.Bold)
-                            StatusBadge(order.status)
+            // Multi-Device Cloud Sync Info Banner
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (firebaseReport?.isConnected == true)
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(
+                                    Icons.Default.CloudSync,
+                                    contentDescription = null,
+                                    tint = if (firebaseReport?.isConnected == true) LocalTealPrimary else MaterialTheme.colorScheme.error
+                                )
+                                Column {
+                                    Text("Firebase Firestore Cloud Sync", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    val isConn = firebaseReport?.isConnected == true
+                                    val isReal = firebaseReport?.isRealGoogleCloudProject == true
+                                    val badgeText = when {
+                                        isConn && firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.CONNECTED ->
+                                            "🟢 Real Firebase Project Connected"
+                                        isReal || firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.VERIFIED_AUTH_REQUIRED ->
+                                            "🟢 Real Project Verified (${firebaseReport?.projectId})"
+                                        firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.NOT_CONFIGURED ->
+                                            "🔴 Not Configured • Enter Project ID"
+                                        else ->
+                                            "🟡 Checking Endpoint (${firebaseReport?.projectId})"
+                                    }
+                                    Text(
+                                        badgeText,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isConn || isReal) LocalSuccess else MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                            if (isSyncing || isVerifyingFirebase) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalTealPrimary
+                                )
+                            }
                         }
-                        Text("Customer: ${order.customerName} • ₹${order.finalAmount.toInt()}", fontSize = 13.sp)
-                        Text("Delivered by: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}", fontSize = 11.sp, color = LocalTextSecondary)
+
+                        // Project & Status details
+                        Text(
+                            firebaseReport?.statusMessage
+                                ?: "Real Google Cloud Firestore connection verification active. Zero mock data.",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary,
+                            lineHeight = 16.sp
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                "Project: ${firebaseReport?.projectId ?: com.example.data.firebase.FirebaseSyncConfig.FIREBASE_PROJECT_ID}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = LocalTealPrimary
+                            )
+                            Text(
+                                "Endpoint: firestore.googleapis.com",
+                                fontSize = 10.sp,
+                                color = LocalTextSecondary
+                            )
+                        }
+
+                        Text(
+                            "Local Data Guarantee: 100% of customer orders, shops, and products are safely preserved in Room SQLite without deletion or reset.",
+                            fontSize = 11.sp,
+                            color = LocalTextSecondary
+                        )
+
+                        // Action buttons row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.verifyFirebaseConnection() },
+                                enabled = !isVerifyingFirebase,
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Verify Real", fontSize = 11.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = { showConfigDialog = true },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Project ID", fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = { viewModel.syncOrdersFromCloud() },
+                                enabled = !isSyncing,
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Sync Now", fontSize = 11.sp)
+                            }
+                        }
                     }
                 }
+            }
+
+            // Project ID Configuration Dialog
+            if (showConfigDialog) {
+                item {
+                    AlertDialog(
+                        onDismissRequest = { showConfigDialog = false },
+                        title = { Text("Configure Firebase Project") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    "Enter your real Firebase / Google Cloud Project ID from console.firebase.google.com:",
+                                    fontSize = 13.sp
+                                )
+                                OutlinedTextField(
+                                    value = inputProjectId,
+                                    onValueChange = { inputProjectId = it },
+                                    label = { Text("Firebase Project ID") },
+                                    placeholder = { Text("e.g. my-firebase-app-123") },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    "Note: All local data remains preserved. Firestore will be probed directly via REST API.",
+                                    fontSize = 11.sp,
+                                    color = LocalTextSecondary
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(onClick = {
+                                viewModel.setFirebaseProjectId(inputProjectId)
+                                showConfigDialog = false
+                            }) {
+                                Text("Save & Verify")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showConfigDialog = false }) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
+                }
+            }
+
+            // Search Bar
+            item {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search by Order #, Customer, Phone, Shop...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true
+                )
+            }
+
+            // Shop Filter (All Shops or Specific Shop)
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Filter by Shop:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedShopId == null,
+                                onClick = { selectedShopId = null },
+                                label = { Text("All Shops (${orders.size})") }
+                            )
+                        }
+                        items(shops) { shop ->
+                            val shopOrderCount = orders.count { it.shopId == shop.id }
+                            FilterChip(
+                                selected = selectedShopId == shop.id,
+                                onClick = { selectedShopId = if (selectedShopId == shop.id) null else shop.id },
+                                label = { Text("${shop.name} ($shopOrderCount)") }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Order Status Filter
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Filter by Status:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedStatus == null,
+                                onClick = { selectedStatus = null },
+                                label = { Text("All (${shopFiltered.size})") }
+                            )
+                        }
+                        items(OrderStatus.values()) { status ->
+                            val count = shopFiltered.count { it.status == status }
+                            FilterChip(
+                                selected = selectedStatus == status,
+                                onClick = { selectedStatus = if (selectedStatus == status) null else status },
+                                label = { Text("${status.name.replace('_', ' ')} ($count)") }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Orders List
+            if (finalOrders.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Default.ReceiptLong, contentDescription = null, modifier = Modifier.size(48.dp), tint = LocalTextSecondary)
+                            Text("No orders match the selected filters", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            Text("Try clearing filters or search to view other orders.", fontSize = 12.sp, color = LocalTextSecondary)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (selectedShopId != null || selectedStatus != null || searchQuery.isNotBlank()) {
+                                    OutlinedButton(onClick = {
+                                        selectedShopId = null
+                                        selectedStatus = null
+                                        searchQuery = ""
+                                    }) {
+                                        Text("Clear Filters")
+                                    }
+                                }
+                                Button(onClick = { viewModel.syncOrdersFromCloud() }) {
+                                    Text("Refresh from Cloud")
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(finalOrders, key = { it.id }) { order ->
+                    val shop = shopMap[order.shopId]
+                    val items = allOrderItems.filter { it.orderId == order.id }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Header: Order #, Date, Status
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Order #${order.orderNumber}", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    val formattedDate = try {
+                                        dateFormat.format(Date(order.placedAt))
+                                    } catch (e: Exception) {
+                                        "Recently placed"
+                                    }
+                                    Text("Placed: $formattedDate", fontSize = 11.sp, color = LocalTextSecondary)
+                                }
+                                StatusBadge(order.status)
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            // Shop Information
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = LocalTealPrimary.copy(alpha = 0.08f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Store, contentDescription = null, modifier = Modifier.size(16.dp), tint = LocalTealPrimary)
+                                    Text(
+                                        "Shop: ${shop?.name ?: "Shop #${order.shopId}"} (${shop?.category ?: "Local Vendor"})",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        color = LocalTealPrimary
+                                    )
+                                }
+                            }
+
+                            // Customer Details with Direct Call Button
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("👤 Customer: ${order.customerName}", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Text("📞 Phone: ${order.customerPhone}", fontSize = 12.sp, color = LocalTextSecondary)
+                                    Text("📍 Address: ${order.deliveryAddress}", fontSize = 12.sp, color = LocalTextSecondary)
+                                }
+
+                                if (order.customerPhone.isNotBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${order.customerPhone}"))
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                // Handle no dialer
+                                            }
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(Icons.Default.Phone, contentDescription = "Call Customer", tint = Color(0xFF2E7D32))
+                                    }
+                                }
+                            }
+
+                            // Ordered Items List
+                            if (items.isNotEmpty()) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        "Ordered Products (${items.sumOf { it.quantity }} items):",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.sp
+                                    )
+                                    for (item in items) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("• ${item.quantity}x ${item.productName}", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                            Text("₹${item.totalPrice.toInt()}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Financial & Delivery Details
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        "🛵 ${if (order.deliveryType == DeliveryType.HOME_DELIVERY) "Home Delivery" else "Store Pickup"}",
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        "💳 ${order.paymentMethod.name.replace('_', ' ')} • ${order.paymentStatus.name}",
+                                        fontSize = 11.sp,
+                                        color = if (order.paymentStatus == PaymentStatus.PAID) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        "Total: ₹${order.finalAmount.toInt()}",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                        color = LocalTealPrimary
+                                    )
+                                    if (order.discountAmount > 0) {
+                                        Text(
+                                            "Saved ₹${order.discountAmount.toInt()}",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF2E7D32)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (order.orderNotes.isNotBlank()) {
+                                Text("📝 Note: ${order.orderNotes}", fontSize = 11.sp, color = LocalTextSecondary)
+                            }
+
+                            Text(
+                                "🛵 Delivery Agent: ${order.deliveryAgentAssigned ?: "Harishchandra Sagar (Admin)"}",
+                                fontSize = 11.sp,
+                                color = LocalTextSecondary
+                            )
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            // Admin Action Controls (Change Status)
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Admin Status Actions:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    when (order.status) {
+                                        OrderStatus.PLACED -> {
+                                            Button(
+                                                onClick = { viewModel.updateOrderStatus(order.id, OrderStatus.ACCEPTED) },
+                                                modifier = Modifier.weight(1f),
+                                                colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
+                                            ) {
+                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Accept Order", fontSize = 12.sp)
+                                            }
+                                            OutlinedButton(
+                                                onClick = { viewModel.updateOrderStatus(order.id, OrderStatus.CANCELLED) },
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                            ) {
+                                                Text("Cancel", fontSize = 12.sp)
+                                            }
+                                        }
+                                        OrderStatus.ACCEPTED -> {
+                                            Button(
+                                                onClick = { viewModel.updateOrderStatus(order.id, OrderStatus.PREPARING) },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Mark Preparing 🍳", fontSize = 12.sp)
+                                            }
+                                        }
+                                        OrderStatus.PREPARING -> {
+                                            Button(
+                                                onClick = { viewModel.updateOrderStatus(order.id, OrderStatus.READY_FOR_PICKUP) },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Ready for Pickup 🛍️", fontSize = 12.sp)
+                                            }
+                                        }
+                                        OrderStatus.READY_FOR_PICKUP -> {
+                                            Button(
+                                                onClick = { viewModel.updateOrderStatus(order.id, OrderStatus.OUT_FOR_DELIVERY) },
+                                                modifier = Modifier.weight(1f),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                            ) {
+                                                Icon(Icons.Default.TwoWheeler, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Out for Delivery 🛵", fontSize = 12.sp)
+                                            }
+                                        }
+                                        OrderStatus.OUT_FOR_DELIVERY -> {
+                                            Button(
+                                                onClick = { viewModel.completeAdminDelivery(order.id, "", "", order.finalAmount) },
+                                                modifier = Modifier.weight(1f),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                                            ) {
+                                                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Mark Delivered & Paid 📦", fontSize = 12.sp)
+                                            }
+                                        }
+                                        OrderStatus.DELIVERED -> {
+                                            SuggestionChip(
+                                                onClick = { },
+                                                label = { Text("✅ Order Delivered & Fulfilled") },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                        OrderStatus.CANCELLED -> {
+                                            SuggestionChip(
+                                                onClick = { },
+                                                label = { Text("❌ Order Cancelled") },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                    }
+
+                                    // Dropdown menu button to change status to any value
+                                    Box {
+                                        IconButton(onClick = { statusMenuOrderId = order.id }) {
+                                            Icon(Icons.Default.MoreVert, contentDescription = "Change Status")
+                                        }
+
+                                        DropdownMenu(
+                                            expanded = statusMenuOrderId == order.id,
+                                            onDismissRequest = { statusMenuOrderId = null }
+                                        ) {
+                                            Text("Set Status:", modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), fontSize = 11.sp, color = LocalTextSecondary)
+                                            for (s in OrderStatus.values()) {
+                                                DropdownMenuItem(
+                                                    text = { Text(s.name.replace('_', ' ')) },
+                                                    onClick = {
+                                                        statusMenuOrderId = null
+                                                        viewModel.updateOrderStatus(order.id, s)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }

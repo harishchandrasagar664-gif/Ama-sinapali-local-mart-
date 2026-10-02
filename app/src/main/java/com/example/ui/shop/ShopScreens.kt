@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -611,6 +612,19 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             label = { Text("Category") },
                             modifier = Modifier.fillMaxWidth()
                         )
+                        Text("Select Category:", fontSize = 11.sp, color = LocalTextSecondary)
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(com.example.data.local.SeedData.shoppingCategories) { cat ->
+                                FilterChip(
+                                    selected = prodCat.equals(cat, ignoreCase = true),
+                                    onClick = { prodCat = cat },
+                                    label = { Text(cat, fontSize = 11.sp) }
+                                )
+                            }
+                        }
 
                         Text("Product Image (Permanent App Storage)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         Row(
