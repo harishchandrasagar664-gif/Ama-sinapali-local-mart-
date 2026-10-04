@@ -229,4 +229,102 @@ class FirebaseSyncPreparationTest {
         assertTrue("Summary mentions phase roadmap", summary.contains("Phase Roadmap"))
         assertTrue("Summary confirms safety lock", summary.contains("Safety Lock: Active"))
     }
+
+    @Test
+    fun testOrderToMapForFirebaseSdk() {
+        val order = OrderEntity(
+            id = 100L,
+            orderNumber = "ORD-SIN-SDK-12345",
+            userId = 3L,
+            shopId = 2L,
+            totalAmount = 250.0,
+            discountAmount = 25.0,
+            deliveryFee = 25.0,
+            finalAmount = 250.0,
+            status = OrderStatus.PLACED,
+            deliveryType = DeliveryType.HOME_DELIVERY,
+            paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+            paymentStatus = PaymentStatus.PENDING,
+            deliveryAddress = "Ward 4, Sinapali",
+            customerPhone = "9876543210",
+            customerName = "Test Customer",
+            placedAt = 1700000000000L
+        )
+        val items = listOf(
+            OrderItemEntity(
+                id = 1L,
+                orderId = 100L,
+                productId = 10L,
+                productName = "Sweet Khaja (500g)",
+                unitPrice = 120.0,
+                quantity = 2,
+                totalPrice = 240.0
+            )
+        )
+
+        val map = FirestoreSyncService.orderToMap(order, items)
+        assertEquals("ORD-SIN-SDK-12345", map["orderNumber"])
+        assertEquals("Test Customer", map["customerName"])
+        assertEquals("PLACED", map["status"])
+        assertEquals(250.0, map["finalAmount"])
+        val itemsList = map["items"] as? List<*>
+        assertNotNull(itemsList)
+        assertEquals(1, itemsList?.size)
+    }
+
+    @Test
+    fun testFirestorePayloadToOrder_SupportsBothIntegerAndDoubleValues() {
+        val json = org.json.JSONObject("""
+            {
+                "name": "projects/ama-sinapali-local-mart/databases/(default)/documents/orders/ORD-SIN-998877",
+                "fields": {
+                    "orderNumber": { "stringValue": "ORD-SIN-998877" },
+                    "customerName": { "stringValue": "Harishchandra Customer" },
+                    "customerPhone": { "stringValue": "9437012345" },
+                    "deliveryAddress": { "stringValue": "Sinapali Market" },
+                    "totalAmount": { "integerValue": "350" },
+                    "discountAmount": { "integerValue": "50" },
+                    "deliveryFee": { "integerValue": "25" },
+                    "finalAmount": { "integerValue": "325" },
+                    "status": { "stringValue": "PLACED" },
+                    "deliveryType": { "stringValue": "HOME_DELIVERY" },
+                    "paymentMethod": { "stringValue": "CASH_ON_DELIVERY" },
+                    "paymentStatus": { "stringValue": "PENDING" }
+                }
+            }
+        """.trimIndent())
+
+        val result = FirestoreSyncService.firestorePayloadToOrder(json)
+        assertNotNull("Payload must parse successfully", result)
+        val order = result!!.first
+        assertEquals("ORD-SIN-998877", order.orderNumber)
+        assertEquals("Harishchandra Customer", order.customerName)
+        assertEquals(350.0, order.totalAmount, 0.01)
+        assertEquals(50.0, order.discountAmount, 0.01)
+        assertEquals(25.0, order.deliveryFee, 0.01)
+        assertEquals(325.0, order.finalAmount, 0.01)
+        assertEquals(OrderStatus.PLACED, order.status)
+    }
+
+    @Test
+    fun testFirestorePayloadToOrder_FallbackDocNameWhenOrderNumberFieldMissing() {
+        val json = org.json.JSONObject("""
+            {
+                "name": "projects/ama-sinapali-local-mart/databases/(default)/documents/orders/ORD-SIN-AUTO-555",
+                "fields": {
+                    "customerName": { "stringValue": "Mobile Customer" },
+                    "customerPhone": { "stringValue": "9437099999" },
+                    "deliveryAddress": { "stringValue": "Ward 2, Sinapali" },
+                    "finalAmount": { "doubleValue": 199.0 },
+                    "status": { "stringValue": "PLACED" }
+                }
+            }
+        """.trimIndent())
+
+        val result = FirestoreSyncService.firestorePayloadToOrder(json)
+        assertNotNull("Must parse even when orderNumber field is missing by using doc path", result)
+        assertEquals("ORD-SIN-AUTO-555", result!!.first.orderNumber)
+        assertEquals("Mobile Customer", result.first.customerName)
+        assertEquals(199.0, result.first.finalAmount, 0.01)
+    }
 }

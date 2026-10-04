@@ -52,8 +52,18 @@ fun AdminDashboardScreen(
     val promotions by viewModel.allPromotions.collectAsState()
     val complaints by viewModel.allComplaints.collectAsState()
 
+    val placedOrdersCount = orders.count { it.status == OrderStatus.PLACED }
     val pendingDelivery = orders.count { it.status == OrderStatus.READY_FOR_PICKUP || it.status == OrderStatus.OUT_FOR_DELIVERY }
     val totalRevenue = orders.filter { it.status == OrderStatus.DELIVERED }.sumOf { it.finalAmount }
+
+    LaunchedEffect(Unit) {
+        viewModel.verifyFirebaseConnection()
+        viewModel.syncOrdersFromCloud()
+        while (true) {
+            kotlinx.coroutines.delay(3000)
+            viewModel.syncOrdersFromCloud()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -86,7 +96,13 @@ fun AdminDashboardScreen(
                 NavigationBarItem(
                     selected = false,
                     onClick = { viewModel.navigateTo(Screen.AdminOrders) },
-                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Orders") },
+                    icon = {
+                        BadgedBox(badge = {
+                            if (orders.isNotEmpty()) Badge { Text("${orders.size}") }
+                        }) {
+                            Icon(Icons.Default.ReceiptLong, contentDescription = "Orders")
+                        }
+                    },
                     label = { Text("Orders") }
                 )
                 NavigationBarItem(
@@ -124,9 +140,23 @@ fun AdminDashboardScreen(
                 }
             }
 
-            // Quick Nav Cards
+            // Quick Nav Cards: Orders, Delivery Hub, Promotions
             item {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { viewModel.navigateTo(Screen.AdminOrders) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE0F2FE))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Icon(Icons.Default.ReceiptLong, contentDescription = null, tint = LocalTealPrimary)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Town Orders", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("${orders.size} total ($placedOrdersCount new)", fontSize = 11.sp, color = LocalTealDark, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                     Card(
                         modifier = Modifier
                             .weight(1f)
@@ -134,11 +164,11 @@ fun AdminDashboardScreen(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Icon(Icons.Default.TwoWheeler, contentDescription = null, tint = Color(0xFFE65100))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text("Delivery Hub", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("$pendingDelivery to deliver", fontSize = 12.sp, color = Color(0xFFE65100), fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Delivery Hub", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("$pendingDelivery to deliver", fontSize = 11.sp, color = Color(0xFFE65100), fontWeight = FontWeight.SemiBold)
                         }
                     }
                     Card(
@@ -148,33 +178,70 @@ fun AdminDashboardScreen(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Icon(Icons.Default.Campaign, contentDescription = null, tint = Color(0xFF2E7D32))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text("Promotions", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("${promotions.size} requests", fontSize = 12.sp, color = Color(0xFF2E7D32))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Promotions", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("${promotions.size} requests", fontSize = 11.sp, color = Color(0xFF2E7D32))
                         }
                     }
                 }
             }
 
             item {
-                Text("Recent Town Orders", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Recent Town Orders (${orders.size})", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    if (orders.isNotEmpty()) {
+                        TextButton(onClick = { viewModel.navigateTo(Screen.AdminOrders) }) {
+                            Text("View All", fontSize = 12.sp, color = LocalTealPrimary)
+                        }
+                    }
+                }
             }
 
-            items(orders) { order ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Order #${order.orderNumber}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            StatusBadge(order.status)
+            if (orders.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.ReceiptLong, contentDescription = null, modifier = Modifier.size(40.dp), tint = LocalTextSecondary)
+                            Text("No customer orders yet", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text("Orders placed by customers will appear here immediately.", fontSize = 12.sp, color = LocalTextSecondary)
                         }
-                        Text("Customer: ${order.customerName} (${order.customerPhone})", fontSize = 12.sp)
-                        Text("Amount: ₹${order.finalAmount.toInt()} (${order.paymentMethod.name.replace('_', ' ')})", fontSize = 12.sp)
-                        Text("Address: ${order.deliveryAddress}", fontSize = 11.sp, color = LocalTextSecondary)
+                    }
+                }
+            } else {
+                items(orders, key = { it.orderNumber.ifBlank { it.id.toString() } }) { order ->
+                    val shop = shops.find { it.id == order.shopId }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.navigateTo(Screen.AdminOrders) },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Order #${order.orderNumber}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                StatusBadge(order.status)
+                            }
+                            Text("Shop: ${shop?.name ?: "Sinapali Mart"}", fontSize = 12.sp, color = LocalTealPrimary, fontWeight = FontWeight.SemiBold)
+                            Text("Customer: ${order.customerName} (${order.customerPhone})", fontSize = 12.sp)
+                            Text("Amount: ₹${order.finalAmount.toInt()} (${order.paymentMethod.name.replace('_', ' ')})", fontSize = 12.sp)
+                            Text("Address: ${order.deliveryAddress}", fontSize = 11.sp, color = LocalTextSecondary)
+                        }
                     }
                 }
             }
@@ -342,10 +409,14 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
     val shopMap = remember(shops) { shops.associateBy { it.id } }
     val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
 
-    // Automatic verification and sync on opening screen
+    // Automatic live sync and continuous polling every 3 seconds while viewing Admin Orders
     LaunchedEffect(Unit) {
         viewModel.verifyFirebaseConnection()
         viewModel.syncOrdersFromCloud()
+        while (true) {
+            kotlinx.coroutines.delay(3000)
+            viewModel.syncOrdersFromCloud()
+        }
     }
 
     // Filter by shop
@@ -699,7 +770,7 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
                     }
                 }
             } else {
-                items(finalOrders, key = { it.id }) { order ->
+                items(finalOrders, key = { it.orderNumber.ifBlank { it.id.toString() } }) { order ->
                     val shop = shopMap[order.shopId]
                     val items = allOrderItems.filter { it.orderId == order.id }
 
@@ -805,6 +876,25 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
                                             Text("• ${item.quantity}x ${item.productName}", fontSize = 12.sp, modifier = Modifier.weight(1f))
                                             Text("₹${item.totalPrice.toInt()}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                         }
+                                    }
+                                }
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.ShoppingBag, contentDescription = null, modifier = Modifier.size(14.dp), tint = LocalTextSecondary)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (order.orderNotes.isNotBlank()) "Order: ${order.orderNotes}" else "Town Order Items • Total ₹${order.finalAmount.toInt()}",
+                                            fontSize = 12.sp,
+                                            color = LocalTextSecondary
+                                        )
                                     }
                                 }
                             }

@@ -416,7 +416,9 @@ fun ProductCard(
 fun AccessDeniedScreen(
     title: String,
     message: String,
-    onGoBack: () -> Unit
+    onGoBack: () -> Unit,
+    secondaryActionText: String? = null,
+    onSecondaryAction: (() -> Unit)? = null
 ) {
     Box(
         modifier = Modifier
@@ -458,6 +460,17 @@ fun AccessDeniedScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
                     Text("Return to Customer Store", color = Color.White)
+                }
+
+                if (secondaryActionText != null && onSecondaryAction != null) {
+                    OutlinedButton(
+                        onClick = onSecondaryAction,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onErrorContainer)
+                    ) {
+                        Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(secondaryActionText, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

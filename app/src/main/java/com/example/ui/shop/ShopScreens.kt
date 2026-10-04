@@ -68,8 +68,18 @@ fun ShopOwnerDashboardScreen(
 
     var showDpDialog by remember { mutableStateOf(false) }
 
-    val myShop = shops.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user?.shopId) }
-    val myOrders = if (myShop != null) orders.filter { it.shopId == myShop.id } else emptyList()
+    val myShop = shops.find {
+        it.ownerId == user?.id ||
+        (user?.shopId != null && it.id == user?.shopId) ||
+        (user?.phone != null && it.phone.isNotBlank() && it.phone == user?.phone)
+    }
+    val myOrders = if (myShop != null) {
+        orders.filter { order ->
+            order.shopId == myShop.id || allOrderItems.any { item ->
+                item.orderId == order.id && products.any { p -> p.id == item.productId && p.shopId == myShop.id }
+            }
+        }
+    } else emptyList()
     val myProducts = if (myShop != null) products.filter { it.shopId == myShop.id } else emptyList()
     val myNotifications = remember(allNotifications, myShop, user) {
         if (myShop != null) {
@@ -79,6 +89,7 @@ fun ShopOwnerDashboardScreen(
                     notif.message.contains("Order", ignoreCase = true)
                 val isForMyShop = notif.userId == user?.id ||
                     notif.userId == myShop.ownerId ||
+                    (user?.shopId != null && notif.userId == user?.shopId) ||
                     notif.title.contains(myShop.name, ignoreCase = true) ||
                     notif.message.contains(myShop.name, ignoreCase = true)
                 isOrderNotification && isForMyShop
@@ -202,6 +213,36 @@ fun ShopOwnerDashboardScreen(
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("Use Shop Photo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onRoleSwitchClick,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Switch Role", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            FilledTonalButton(
+                                onClick = { viewModel.switchToCustomerView() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Customer Store", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -431,7 +472,11 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
     val user by viewModel.currentUser.collectAsState()
     val shops by viewModel.allShops.collectAsState()
     val products by viewModel.allProducts.collectAsState()
-    val myShop = shops.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user?.shopId) }
+    val myShop = shops.find {
+        it.ownerId == user?.id ||
+        (user?.shopId != null && it.id == user?.shopId) ||
+        (user?.phone != null && it.phone.isNotBlank() && it.phone == user?.phone)
+    }
     val myProducts = if (myShop != null) products.filter { it.shopId == myShop.id } else emptyList()
 
     var showProductDialog by remember { mutableStateOf(false) }
@@ -742,7 +787,11 @@ fun ShopOffersPromotionsScreen(viewModel: MainViewModel) {
     val allPromotions by viewModel.allPromotions.collectAsState()
     val pricingConfig by viewModel.promotionPricingConfig.collectAsState()
 
-    val myShop = shops.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user?.shopId) }
+    val myShop = shops.find {
+        it.ownerId == user?.id ||
+        (user?.shopId != null && it.id == user?.shopId) ||
+        (user?.phone != null && it.phone.isNotBlank() && it.phone == user?.phone)
+    }
     val myProducts = if (myShop != null) products.filter { it.shopId == myShop.id } else emptyList()
     val myPromotions = if (myShop != null) allPromotions.filter { it.shopId == myShop.id } else emptyList()
 

@@ -345,10 +345,12 @@ class AuthManager(
 
     fun switchRole(role: UserRole) {
         _currentRole.value = role
-        when (role) {
-            UserRole.CUSTOMER -> _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
-            UserRole.SHOP_OWNER -> _currentUser.value = SeedData.shopOwners[0]
-            UserRole.ADMIN -> _currentUser.value = SeedData.adminUser
+        if (_currentUser.value?.role != role) {
+            when (role) {
+                UserRole.CUSTOMER -> _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
+                UserRole.SHOP_OWNER -> _currentUser.value = SeedData.shopOwners[0]
+                UserRole.ADMIN -> _currentUser.value = SeedData.adminUser
+            }
         }
     }
 

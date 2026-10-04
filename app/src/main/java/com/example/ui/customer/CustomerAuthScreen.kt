@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.example.ui.customer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,6 +13,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -94,7 +99,7 @@ fun CustomerAuthScreen(
                             viewModel.navigateBack()
                         }
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = s.back)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -156,6 +161,106 @@ fun CustomerAuthScreen(
                 }
             }
 
+            // PROMINENT SHOP OWNER PORTAL BANNER (Always visible at the top of the Login Screen)
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.navigateTo(Screen.ShopOwnerAuth) },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                    border = BorderStroke(1.5.dp, Color(0xFFFF9800)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFFE65100),
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Storefront,
+                                        contentDescription = "Shop Owner Portal",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        "Shop Owner Login / Register",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color(0xFFBF360C)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFFE65100)
+                                    ) {
+                                        Text(
+                                            "MERCHANT",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "Shop Owner Login with OTP • Register New Shop",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFE65100),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "ଦୋକାନୀ ଲଗଇନ୍ • ନୂଆ ଦୋକାନ ପଞ୍ଜୀକରଣ (Mobile OTP)",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF5D4037)
+                                )
+                            }
+                        }
+
+                        Text(
+                            "Sinapali local shop owners: Register with Owner Name, Shop Name, Photo & Location or Login directly with 10-digit mobile & OTP.",
+                            fontSize = 11.sp,
+                            color = LocalTextSecondary,
+                            lineHeight = 15.sp
+                        )
+
+                        Button(
+                            onClick = { viewModel.navigateTo(Screen.ShopOwnerAuth) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("btn_shop_owner_portal_login"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                        ) {
+                            Icon(Icons.Default.Store, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Shop Owner Login with OTP (ଦୋକାନୀ ଲଗଇନ୍)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+
             if (isSessionActive && currentUser != null) {
                 item {
                     Card(
@@ -186,7 +291,7 @@ fun CustomerAuthScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
                             ) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = null)
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Return to Store / Home")
                             }
@@ -195,7 +300,7 @@ fun CustomerAuthScreen(
                 }
             }
 
-            // Mode Selector: Login vs Register
+            // Mode Selector: Login vs Register vs Shop Owner
             item {
                 TabRow(
                     selectedTabIndex = if (authMode == AuthMode.LOGIN) 0 else 1,
@@ -212,7 +317,8 @@ fun CustomerAuthScreen(
                         text = {
                             Text(
                                 s.loginTab,
-                                fontWeight = if (authMode == AuthMode.LOGIN) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (authMode == AuthMode.LOGIN) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 12.sp
                             )
                         },
                         icon = { Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -228,11 +334,28 @@ fun CustomerAuthScreen(
                         text = {
                             Text(
                                 s.registerTab,
-                                fontWeight = if (authMode == AuthMode.REGISTER) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (authMode == AuthMode.REGISTER) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 12.sp
                             )
                         },
                         icon = { Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         modifier = Modifier.testTag("tab_register")
+                    )
+                    Tab(
+                        selected = false,
+                        onClick = {
+                            viewModel.navigateTo(Screen.ShopOwnerAuth)
+                        },
+                        text = {
+                            Text(
+                                "Shop Owner",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = Color(0xFFE65100)
+                            )
+                        },
+                        icon = { Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFE65100)) },
+                        modifier = Modifier.testTag("tab_shop_owner_portal")
                     )
                 }
             }
@@ -702,6 +825,64 @@ fun CustomerAuthScreen(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // Bottom Merchant Card for easy shop owner access
+            item {
+                OutlinedCard(
+                    onClick = { viewModel.navigateTo(Screen.ShopOwnerAuth) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFFB74D))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFFFFF3E0),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Storefront,
+                                        contentDescription = null,
+                                        tint = Color(0xFFE65100),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    "Own a Shop in Sinapali Town?",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = Color(0xFFBF360C)
+                                )
+                                Text(
+                                    "Register with Owner Name, Shop Name & Photo to sell online",
+                                    fontSize = 11.sp,
+                                    color = LocalTextSecondary
+                                )
+                            }
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = Color(0xFFE65100),
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }

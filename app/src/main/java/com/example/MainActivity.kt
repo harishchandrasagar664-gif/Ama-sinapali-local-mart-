@@ -222,6 +222,14 @@ class MainActivity : ComponentActivity() {
                             is Screen.ReturnsRefunds -> ReturnsRefundsScreen(viewModel)
 
                             // Shop Owner Screens: Strictly restricted to UserRole.SHOP_OWNER
+                            is Screen.ShopOwnerAuth -> {
+                                ShopOwnerAuthScreen(
+                                    viewModel = viewModel,
+                                    onSuccess = {
+                                        viewModel.navigateTo(Screen.ShopOwnerDashboard)
+                                    }
+                                )
+                            }
                             is Screen.ShopOwnerDashboard, is Screen.ShopOrderManagement -> {
                                 if (currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) {
                                     ShopOwnerDashboardScreen(
@@ -234,8 +242,10 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     AccessDeniedScreen(
                                         title = "Shop Owner Access Denied",
-                                        message = "Customers must never access the Shop Owner dashboard. Only authorized Shop Owners can access their shop dashboard.",
-                                        onGoBack = { viewModel.switchToCustomerView() }
+                                        message = "Customers must never access the Shop Owner dashboard. Only authorized Shop Owners can access their shop dashboard with verified mobile & OTP.",
+                                        onGoBack = { viewModel.switchToCustomerView() },
+                                        secondaryActionText = "Shop Owner Login (OTP)",
+                                        onSecondaryAction = { viewModel.navigateTo(Screen.ShopOwnerAuth) }
                                     )
                                 }
                             }
@@ -246,7 +256,9 @@ class MainActivity : ComponentActivity() {
                                     AccessDeniedScreen(
                                         title = "Shop Owner Access Denied",
                                         message = "Customers cannot manage shop products.",
-                                        onGoBack = { viewModel.switchToCustomerView() }
+                                        onGoBack = { viewModel.switchToCustomerView() },
+                                        secondaryActionText = "Shop Owner Login (OTP)",
+                                        onSecondaryAction = { viewModel.navigateTo(Screen.ShopOwnerAuth) }
                                     )
                                 }
                             }
@@ -257,7 +269,9 @@ class MainActivity : ComponentActivity() {
                                     AccessDeniedScreen(
                                         title = "Shop Owner Access Denied",
                                         message = "Customers cannot request shop promotions.",
-                                        onGoBack = { viewModel.switchToCustomerView() }
+                                        onGoBack = { viewModel.switchToCustomerView() },
+                                        secondaryActionText = "Shop Owner Login (OTP)",
+                                        onSecondaryAction = { viewModel.navigateTo(Screen.ShopOwnerAuth) }
                                     )
                                 }
                             }
@@ -475,7 +489,11 @@ class MainActivity : ComponentActivity() {
                                             }
 
                                             if (portalTab == 0) {
-                                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                val isOtpSent by viewModel.isShopOwnerOtpSent.collectAsState()
+                                                val otpCode by viewModel.shopOwnerOtpCode.collectAsState()
+                                                var inlineOtp by remember { mutableStateOf("") }
+
+                                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                     Text(
                                                         "Enter registered Shop Owner mobile number (e.g. Ramesh Sahu 9437012345, Santosh Meher 9437054321):",
                                                         fontSize = 11.sp
@@ -483,30 +501,90 @@ class MainActivity : ComponentActivity() {
                                                     OutlinedTextField(
                                                         value = shopPhoneInput,
                                                         onValueChange = {
-                                                            shopPhoneInput = it
-                                                            portalError = null
+                                                            if (!isOtpSent) {
+                                                                shopPhoneInput = it
+                                                                portalError = null
+                                                            }
                                                         },
+                                                        readOnly = isOtpSent,
                                                         label = { Text("Shop Owner Mobile") },
                                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                                                         modifier = Modifier.fillMaxWidth(),
                                                         singleLine = true
                                                     )
-                                                    Button(
-                                                        onClick = {
-                                                            viewModel.loginShopOwnerWithCredentials(shopPhoneInput) { success, msg ->
-                                                                if (success) {
-                                                                    showPortalSwitcher = false
-                                                                } else {
-                                                                    portalError = msg
+
+                                                    if (!isOtpSent) {
+                                                        Button(
+                                                            onClick = {
+                                                                val ok = viewModel.sendShopOwnerOtp(shopPhoneInput)
+                                                                if (!ok) {
+                                                                    portalError = viewModel.shopOwnerAuthError.value
                                                                 }
+                                                            },
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                                        ) {
+                                                            Icon(Icons.Default.SendToMobile, contentDescription = null)
+                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                            Text("Send Verification OTP")
+                                                        }
+                                                    } else {
+                                                        otpCode?.let { code ->
+                                                            Surface(
+                                                                color = Color(0xFFE8F5E9),
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            ) {
+                                                                Text(
+                                                                    "Demo OTP: $code (or 123456)",
+                                                                    color = Color(0xFF2E7D32),
+                                                                    fontSize = 12.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    modifier = Modifier.padding(8.dp)
+                                                                )
                                                             }
+                                                        }
+
+                                                        OutlinedTextField(
+                                                            value = inlineOtp,
+                                                            onValueChange = { inlineOtp = it.take(6) },
+                                                            label = { Text("Enter 6-digit OTP") },
+                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            singleLine = true
+                                                        )
+
+                                                        Button(
+                                                            onClick = {
+                                                                viewModel.verifyShopOwnerOtp(inlineOtp) { success, _, msg ->
+                                                                    if (success) {
+                                                                        showPortalSwitcher = false
+                                                                        inlineOtp = ""
+                                                                    } else {
+                                                                        portalError = msg
+                                                                    }
+                                                                }
+                                                            },
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                                        ) {
+                                                            Icon(Icons.Default.VerifiedUser, contentDescription = null)
+                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                            Text("Verify OTP & Open Shop")
+                                                        }
+                                                    }
+
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            showPortalSwitcher = false
+                                                            portalError = null
+                                                            viewModel.navigateTo(Screen.ShopOwnerAuth)
                                                         },
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                                        modifier = Modifier.fillMaxWidth()
                                                     ) {
-                                                        Icon(Icons.Default.LockOpen, contentDescription = null)
+                                                        Icon(Icons.Default.Storefront, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(6.dp))
-                                                        Text("Verify & Open My Shop")
+                                                        Text("Dedicated Shop Login Screen", fontSize = 12.sp)
                                                     }
                                                 }
                                             } else {

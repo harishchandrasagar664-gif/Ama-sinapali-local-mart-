@@ -166,31 +166,171 @@ class MartRepository(private val dao: MartDao) {
         dao.insertOrderItems(orderItems)
         dao.clearCart(customer.id)
 
-        // Instant push to Firebase Firestore and multi-device cloud sync so Admin sees it immediately from any device
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                FirestoreSyncService.pushOrderToFirestore(order.copy(id = orderId), orderItems)
-            } catch (e: Throwable) {
-                // Non-blocking fallback
+        // Guaranteed immediate push to Firebase Firestore so Admin sees it immediately from any device
+        try {
+            FirestoreSyncService.pushOrderToFirestore(order.copy(id = orderId), orderItems)
+        } catch (e: Throwable) {
+            android.util.Log.w("MartRepository", "Notice: Firestore immediate push: ${e.message}")
+        }
+
+        // Notification for the correct Shop Owner based on ordered product/shop
+        val allUsers = dao.getAllUsersSync()
+        val itemsByShopId = items.groupBy { it.shopId }.ifEmpty { mapOf(shop.id to items) }
+        val allShopNames = mutableListOf<String>()
+
+        for ((orderedShopId, shopItems) in itemsByShopId) {
+            val targetShop = dao.getShopByIdSync(orderedShopId) ?: (if (orderedShopId == shop.id) shop else SeedData.shops.find { it.id == orderedShopId })
+            val shopName = targetShop?.name ?: shop.name
+            allShopNames.add(shopName)
+
+            val targetOwnerUserIds = mutableSetOf<Long>()
+            if (targetShop != null && targetShop.ownerId > 0) {
+                targetOwnerUserIds.add(targetShop.ownerId)
             }
-            try {
-                OrderSyncService.pushOrder(order.copy(id = orderId), orderItems)
-            } catch (e: Throwable) {
-                // Non-blocking fallback
+            for (u in allUsers) {
+                if (u.role == UserRole.SHOP_OWNER) {
+                    if ((targetShop != null && u.id == targetShop.ownerId) || u.shopId == orderedShopId || (targetShop != null && u.phone.isNotBlank() && u.phone == targetShop.phone)) {
+                        targetOwnerUserIds.add(u.id)
+                    }
+                }
+            }
+            for (so in SeedData.shopOwners) {
+                if ((targetShop != null && so.id == targetShop.ownerId) || so.shopId == orderedShopId || (targetShop != null && so.phone.isNotBlank() && so.phone == targetShop.phone)) {
+                    targetOwnerUserIds.add(so.id)
+                }
+            }
+            if (targetOwnerUserIds.isEmpty()) {
+                targetOwnerUserIds.add(targetShop?.ownerId ?: orderedShopId)
+            }
+
+            val productNamesSummary = shopItems.joinToString(", ") { "${it.quantity}x ${it.productName}" }
+            val shopTotal = shopItems.sumOf { it.itemTotal }
+            val notifTitle = "New Order #$orderNumber for $shopName! 🛍️"
+            val notifMessage = "Customer ${customer.name} (${customer.phone}) ordered: $productNamesSummary. Total: ₹${shopTotal.toInt()} (${paymentMethod.name.replace('_', ' ')}). Please accept & prepare items for delivery."
+
+            for (ownerUserId in targetOwnerUserIds) {
+                dao.insertNotification(
+                    NotificationEntity(
+                        userId = ownerUserId,
+                        title = notifTitle,
+                        message = notifMessage,
+                        type = NotificationType.ORDER_STATUS,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
             }
         }
 
-        // Notification for Shop Owner
+        // Notification for Admin (Harishchandra Sagar) so Admin Panel alerts immediately
+        val shopNamesSummary = allShopNames.distinct().joinToString(", ").ifEmpty { shop.name }
+        val allProductsSummary = items.joinToString(", ") { "${it.quantity}x ${it.productName}" }
         dao.insertNotification(
             NotificationEntity(
-                userId = shop.ownerId,
-                title = "New Order #$orderNumber Received! 🛍️",
-                message = "New order of ₹$finalAmount from ${customer.name}. Check & prepare items.",
-                type = NotificationType.ORDER_STATUS
+                userId = SeedData.adminUser.id,
+                title = "New Town Order #$orderNumber ($shopNamesSummary)",
+                message = "New order of ₹${finalAmount.toInt()} from ${customer.name} for $shopNamesSummary. Items: $allProductsSummary.",
+                type = NotificationType.ORDER_STATUS,
+                timestamp = System.currentTimeMillis()
             )
         )
 
         orderId
+    }
+
+    suspend fun notifyShopOwnersAndAdminForOrderEntity(order: OrderEntity, items: List<OrderItemEntity>) = withContext(Dispatchers.IO) {
+        val allUsers = dao.getAllUsersSync()
+        val itemsByShop = mutableMapOf<Long, MutableList<OrderItemEntity>>()
+        for (item in items) {
+            val prod = dao.getProductByIdSync(item.productId) ?: SeedData.products.find { it.id == item.productId }
+            val sId = prod?.shopId ?: order.shopId
+            itemsByShop.getOrPut(sId) { mutableListOf() }.add(item)
+        }
+        if (itemsByShop.isEmpty()) {
+            itemsByShop[order.shopId] = items.toMutableList()
+        }
+
+        val allShopNames = mutableListOf<String>()
+        for ((sId, shopItems) in itemsByShop) {
+            val shop = dao.getShopByIdSync(sId) ?: SeedData.shops.find { it.id == sId }
+            val shopName = shop?.name ?: "Shop #$sId"
+            allShopNames.add(shopName)
+
+            val targetOwnerUserIds = mutableSetOf<Long>()
+            if (shop != null && shop.ownerId > 0) targetOwnerUserIds.add(shop.ownerId)
+            for (u in allUsers) {
+                if (u.role == UserRole.SHOP_OWNER) {
+                    if ((shop != null && u.id == shop.ownerId) || u.shopId == sId || (shop != null && u.phone.isNotBlank() && u.phone == shop.phone)) {
+                        targetOwnerUserIds.add(u.id)
+                    }
+                }
+            }
+            for (so in SeedData.shopOwners) {
+                if ((shop != null && so.id == shop.ownerId) || so.shopId == sId || (shop != null && so.phone.isNotBlank() && so.phone == shop.phone)) {
+                    targetOwnerUserIds.add(so.id)
+                }
+            }
+            if (targetOwnerUserIds.isEmpty()) targetOwnerUserIds.add(shop?.ownerId ?: sId)
+
+            val itemsSummary = if (shopItems.isNotEmpty()) shopItems.joinToString(", ") { "${it.quantity}x ${it.productName}" } else "Order #${order.orderNumber}"
+            val shopTotal = if (shopItems.isNotEmpty()) shopItems.sumOf { it.totalPrice } else order.finalAmount
+            val notifTitle = "New Order #${order.orderNumber} for $shopName! 🛍️"
+            val notifMessage = "Customer ${order.customerName} (${order.customerPhone}) ordered: $itemsSummary. Total: ₹${shopTotal.toInt()} (${order.paymentMethod.name.replace('_', ' ')}). Please accept & prepare items for delivery."
+
+            for (ownerUserId in targetOwnerUserIds) {
+                dao.insertNotification(
+                    NotificationEntity(
+                        userId = ownerUserId,
+                        title = notifTitle,
+                        message = notifMessage,
+                        type = NotificationType.ORDER_STATUS,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+
+        val allShopNamesSummary = allShopNames.distinct().joinToString(", ").ifEmpty { "Sinapali Mart" }
+        val allProductsSummary = if (items.isNotEmpty()) items.joinToString(", ") { "${it.quantity}x ${it.productName}" } else "Order #${order.orderNumber}"
+        dao.insertNotification(
+            NotificationEntity(
+                userId = SeedData.adminUser.id,
+                title = "New Town Order #${order.orderNumber} ($allShopNamesSummary)",
+                message = "New order of ₹${order.finalAmount.toInt()} from ${order.customerName} for $allShopNamesSummary. Items: $allProductsSummary.",
+                type = NotificationType.ORDER_STATUS,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun insertOrderFromCloud(order: OrderEntity, items: List<OrderItemEntity>): Long = withContext(Dispatchers.IO) {
+        val existing = dao.getOrderByOrderNumber(order.orderNumber)
+        if (existing != null) {
+            if (existing.status != order.status) {
+                dao.updateOrderStatus(existing.id, order.status)
+            }
+            val existingItems = dao.getOrderItems(existing.id).first()
+            if (existingItems.isEmpty() && items.isNotEmpty()) {
+                val list = items.map { it.copy(id = 0L, orderId = existing.id) }
+                dao.insertOrderItems(list)
+            }
+            return@withContext existing.id
+        }
+        val newId = dao.insertOrder(order.copy(id = 0L))
+        val mappedItems = if (items.isNotEmpty()) {
+            val list = items.map { it.copy(id = 0L, orderId = newId) }
+            dao.insertOrderItems(list)
+            list
+        } else emptyList()
+        notifyShopOwnersAndAdminForOrderEntity(order, mappedItems.ifEmpty { items })
+        newId
+    }
+
+    suspend fun insertOrderItems(items: List<OrderItemEntity>) = withContext(Dispatchers.IO) {
+        dao.insertOrderItems(items)
+    }
+
+    suspend fun updateOrderStatusLocally(orderId: Long, status: OrderStatus) = withContext(Dispatchers.IO) {
+        dao.updateOrderStatus(orderId, status)
     }
 
     suspend fun updateOrderStatus(orderId: Long, newStatus: OrderStatus) = withContext(Dispatchers.IO) {
@@ -318,59 +458,17 @@ class MartRepository(private val dao: MartDao) {
     suspend fun getOrderByOrderNumber(orderNumber: String): OrderEntity? = dao.getOrderByOrderNumber(orderNumber)
 
     /**
-     * Bidirectional sync: Pulls all orders and items from the multi-device cloud sync and merges
+     * Bidirectional sync: Pulls all orders and items from Firebase Firestore and merges
      * them into local Room database, and pushes any local orders not yet in the cloud database.
      * This guarantees that every customer order from every device appears in the Admin Panel.
      */
     suspend fun syncOrdersFromCloud(): Int = withContext(Dispatchers.IO) {
         var syncedCount = 0
         try {
-            // Tier 1: Live Firebase Firestore Cloud Sync
-            try {
-                val firestoreResult = FirestoreSyncService.performLiveCloudSync(dao)
-                syncedCount += firestoreResult.downloadedOrdersCount
-            } catch (e: Throwable) {
-                // Handled gracefully, proceeding to multi-tier fallback
-            }
-
-            val cloudOrders = OrderSyncService.fetchCloudOrders()
-            val cloudOrderNumbers = cloudOrders.map { it.first.orderNumber }.toSet()
-
-            // 1. Upload any local orders that haven't reached the cloud yet
-            val localOrders = dao.getAllOrders().first()
-            for (localOrder in localOrders) {
-                if (!cloudOrderNumbers.contains(localOrder.orderNumber)) {
-                    val localItems = dao.getOrderItems(localOrder.id).first()
-                    OrderSyncService.pushOrder(localOrder, localItems)
-                }
-            }
-
-            // 2. Download all cloud orders and update/insert into local Room database
-            for ((cloudOrder, cloudItems) in cloudOrders) {
-                val existing = dao.getOrderByOrderNumber(cloudOrder.orderNumber)
-                val orderId = if (existing != null) {
-                    dao.updateOrder(
-                        cloudOrder.copy(
-                            id = existing.id,
-                            placedAt = if (cloudOrder.placedAt > 0) cloudOrder.placedAt else existing.placedAt
-                        )
-                    )
-                    existing.id
-                } else {
-                    dao.insertOrder(cloudOrder.copy(id = 0))
-                }
-
-                if (cloudItems.isNotEmpty()) {
-                    val existingItems = dao.getOrderItems(orderId).first()
-                    if (existingItems.isEmpty()) {
-                        val mappedItems = cloudItems.map { it.copy(id = 0, orderId = orderId) }
-                        dao.insertOrderItems(mappedItems)
-                    }
-                }
-                syncedCount++
-            }
+            val firestoreResult = FirestoreSyncService.performLiveCloudSync(dao)
+            syncedCount = firestoreResult.downloadedOrdersCount
         } catch (e: Throwable) {
-            // Log & handle gracefully
+            android.util.Log.w("MartRepository", "Notice: syncOrdersFromCloud error: ${e.message}")
         }
         syncedCount
     }

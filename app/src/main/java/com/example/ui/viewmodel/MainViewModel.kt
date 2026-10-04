@@ -13,6 +13,7 @@ import com.example.data.repository.MartRepository
 import com.example.domain.model.*
 import com.example.service.AuthManager
 import com.example.service.RazorpayPaymentServiceImpl
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -62,14 +63,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val prefs = application.getSharedPreferences("firebase_prefs", Context.MODE_PRIVATE)
             val savedProjectId = prefs.getString("firebase_project_id", null)
-            if (!savedProjectId.isNullOrBlank()) {
+            if (!savedProjectId.isNullOrBlank() && savedProjectId != "ais-asia-southeast1-2c23554d43" && savedProjectId != "ama-sinapali-default") {
                 FirebaseSyncConfig.FIREBASE_PROJECT_ID = savedProjectId.trim()
+            } else {
+                FirebaseSyncConfig.FIREBASE_PROJECT_ID = FirebaseSyncConfig.DEFAULT_FIREBASE_PROJECT_ID
             }
         } catch (_: Throwable) { }
         authManager.restoreSession(viewModelScope)
         verifyFirebaseConnection()
         syncOrdersFromCloud()
         startPeriodicOrderSync()
+        startRealtimeFirebaseOrdersListener()
+    }
+
+    private fun startRealtimeFirebaseOrdersListener() {
+        try {
+            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        android.util.Log.w("MainViewModel", "Realtime Firebase listener notice: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            for (doc in snapshot.documents) {
+                                val parsed = FirestoreSyncService.firestoreDocToOrder(doc)
+                                if (parsed != null) {
+                                    val (remoteOrder, remoteItems) = parsed
+                                    repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                                }
+                            }
+                        }
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase listener: ${e.message}")
+        }
     }
 
     fun verifyFirebaseConnection() {
@@ -115,7 +145,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startPeriodicOrderSync() {
         viewModelScope.launch {
             while (true) {
-                kotlinx.coroutines.delay(20000)
+                kotlinx.coroutines.delay(5000)
                 try {
                     repository.syncOrdersFromCloud()
                     _lastOrderSyncTime.value = System.currentTimeMillis()
@@ -160,10 +190,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allOrders: StateFlow<List<OrderEntity>> = repository.getAllOrders()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val allOrderItems: StateFlow<List<OrderItemEntity>> = repository.getAllOrderItems()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val allUsers: StateFlow<List<UserEntity>> = repository.getAllUsers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -189,7 +219,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (user != null && role == UserRole.CUSTOMER) repository.getCartItems(user.id) else flowOf(emptyList())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val detailedCartItems: StateFlow<List<CartItemWithProduct>> = combine(cartItems, activeProducts, allShops) { carts, prods, shops ->
+    val detailedCartItems: StateFlow<List<CartItemWithProduct>> = combine(cartItems, allProducts, allShops) { carts, prods, shops ->
         val prodMap = prods.associateBy { it.id }
         val shopMap = shops.associateBy { it.id }
         carts.mapNotNull { cart ->
@@ -208,7 +238,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 stock = p.stock
             )
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _appliedCoupon = MutableStateFlow<OfferEntity?>(null)
     val appliedCoupon: StateFlow<OfferEntity?> = _appliedCoupon.asStateFlow()
@@ -221,9 +251,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val notifications: StateFlow<List<NotificationEntity>> = currentUser
         .flatMapLatest { user ->
-            if (user != null) repository.getNotifications(user.id) else repository.getAllNotifications()
+            if (user != null) {
+                if (user.role == UserRole.ADMIN || user.role == UserRole.SHOP_OWNER) {
+                    repository.getAllNotifications()
+                } else {
+                    repository.getNotifications(user.id)
+                }
+            } else {
+                repository.getAllNotifications()
+            }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _showPaymentModal = MutableStateFlow(false)
     val showPaymentModal: StateFlow<Boolean> = _showPaymentModal.asStateFlow()
@@ -463,6 +501,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 razorpayPaymentId = razorpayId
             )
             removeCoupon()
+            launch(Dispatchers.IO) {
+                try {
+                    repository.syncOrdersFromCloud()
+                } catch (_: Throwable) { }
+            }
             navigateTo(Screen.OrderTracking(orderId))
             _userMessage.value = "Order placed successfully! 🎉"
         }
@@ -764,6 +807,182 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Role Authentication methods
+    // Shop Owner Authentication & Registration with Mobile & OTP
+    private val _shopOwnerOtpMobile = MutableStateFlow("")
+    val shopOwnerOtpMobile: StateFlow<String> = _shopOwnerOtpMobile.asStateFlow()
+
+    private val _shopOwnerOtpCode = MutableStateFlow<String?>(null)
+    val shopOwnerOtpCode: StateFlow<String?> = _shopOwnerOtpCode.asStateFlow()
+
+    private val _isShopOwnerOtpSent = MutableStateFlow(false)
+    val isShopOwnerOtpSent: StateFlow<Boolean> = _isShopOwnerOtpSent.asStateFlow()
+
+    private val _shopOwnerAuthError = MutableStateFlow<String?>(null)
+    val shopOwnerAuthError: StateFlow<String?> = _shopOwnerAuthError.asStateFlow()
+
+    private val _identifiedShopOwner = MutableStateFlow<UserEntity?>(null)
+    val identifiedShopOwner: StateFlow<UserEntity?> = _identifiedShopOwner.asStateFlow()
+
+    private val _isNewShopOwnerRegistration = MutableStateFlow(false)
+    val isNewShopOwnerRegistration: StateFlow<Boolean> = _isNewShopOwnerRegistration.asStateFlow()
+
+    private val _isRegisteringShop = MutableStateFlow(false)
+    val isRegisteringShop: StateFlow<Boolean> = _isRegisteringShop.asStateFlow()
+
+    fun sendShopOwnerOtp(mobile: String): Boolean {
+        val trimmed = mobile.trim()
+        if (trimmed.length < 10) {
+            _shopOwnerAuthError.value = "Please enter a valid 10-digit mobile number."
+            return false
+        }
+
+        val allUsersList = allUsers.value
+        val registeredOwner = allUsersList.find { it.role == UserRole.SHOP_OWNER && (it.phone == trimmed || (it.email.isNotBlank() && it.email.equals(trimmed, ignoreCase = true))) }
+            ?: SeedData.shopOwners.find { it.phone == trimmed || it.email.equals(trimmed, ignoreCase = true) }
+
+        val code = ((100000..999999).random()).toString()
+        _shopOwnerOtpMobile.value = trimmed
+        _shopOwnerOtpCode.value = code
+        _identifiedShopOwner.value = registeredOwner
+        _isNewShopOwnerRegistration.value = (registeredOwner == null)
+        _isShopOwnerOtpSent.value = true
+        _shopOwnerAuthError.value = null
+
+        val modeText = if (registeredOwner != null) "Shop Owner Login" else "New Shop Owner Registration"
+        _userMessage.value = "$modeText OTP sent to $trimmed: $code (Use 123456 or $code)"
+        return true
+    }
+
+    fun verifyShopOwnerOtp(enteredCode: String, onResult: (Boolean, Boolean, String) -> Unit) {
+        val currentCode = _shopOwnerOtpCode.value
+        val trimmed = enteredCode.trim()
+        if (currentCode != null && (trimmed == currentCode || trimmed == "123456")) {
+            val owner = _identifiedShopOwner.value ?: allUsers.value.find { it.role == UserRole.SHOP_OWNER && it.phone == _shopOwnerOtpMobile.value }
+                ?: SeedData.shopOwners.find { it.phone == _shopOwnerOtpMobile.value }
+
+            if (owner != null) {
+                // Existing shop owner: log in directly
+                authManager.switchUser(owner)
+                authManager.switchRole(UserRole.SHOP_OWNER)
+                val myShop = allShops.value.find { it.ownerId == owner.id || (owner.shopId != null && it.id == owner.shopId) || (owner.phone.isNotBlank() && it.phone == owner.phone) }
+                resetShopOwnerOtpState()
+                screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
+                _currentScreen.value = Screen.ShopOwnerDashboard
+                _userMessage.value = "Welcome back, ${owner.name}! Accessing ${myShop?.name ?: "Shop Dashboard"}."
+                onResult(true, false, "Login successful")
+            } else {
+                // New shop owner: OTP verified, proceed to shop details registration!
+                _isNewShopOwnerRegistration.value = true
+                _shopOwnerAuthError.value = null
+                onResult(true, true, "OTP verified, proceed to shop registration")
+            }
+        } else {
+            _shopOwnerAuthError.value = "Invalid OTP code. Please enter the correct 6-digit OTP (or use 123456)."
+            onResult(false, false, "Invalid OTP code")
+        }
+    }
+
+    fun registerNewShopOwnerAndShop(
+        ownerName: String,
+        shopName: String,
+        category: String,
+        address: String,
+        phone: String,
+        imageUrl: String,
+        upiId: String = "sinapalimart@upi",
+        description: String = "",
+        deliveryAvailable: Boolean = true,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        if (ownerName.isBlank() || shopName.isBlank() || phone.isBlank()) {
+            _shopOwnerAuthError.value = "Owner Name, Shop Name, and Mobile Number are required."
+            onComplete(false, "Required fields missing")
+            return
+        }
+
+        viewModelScope.launch {
+            _isRegisteringShop.value = true
+            try {
+                // 1. Create separate Shop Owner user
+                val newOwner = UserEntity(
+                    id = 0L,
+                    name = ownerName.trim(),
+                    phone = phone.trim(),
+                    email = "${phone.trim()}@sinapalimart.local",
+                    role = UserRole.SHOP_OWNER,
+                    isVerified = true,
+                    deliveryAddress = address.trim().ifBlank { "Sinapali Main Market" },
+                    district = "Nuapada",
+                    block = "Sinapali",
+                    gp = "Sinapali",
+                    village = "Sinapali"
+                )
+                val newOwnerId = repository.insertUser(newOwner)
+                val persistedOwner = newOwner.copy(id = newOwnerId)
+
+                // 2. Create ShopEntity linked to owner
+                val newShop = ShopEntity(
+                    id = 0L,
+                    ownerId = newOwnerId,
+                    name = shopName.trim(),
+                    category = category.trim().ifBlank { "Daily Essentials" },
+                    address = address.trim().ifBlank { "Sinapali Main Market" },
+                    phone = phone.trim(),
+                    upiId = upiId.trim().ifBlank { "${phone.trim()}@upi" },
+                    imageUrl = imageUrl.trim().ifBlank { "hero_local_mart" },
+                    deliveryAvailable = deliveryAvailable,
+                    isOpen = true,
+                    isApproved = true,
+                    rating = 5.0,
+                    reviewCount = 1,
+                    minOrderAmount = 40.0,
+                    estimatedDeliveryMins = 25
+                )
+                val newShopId = repository.createShop(newShop)
+                val persistedShop = newShop.copy(id = newShopId)
+
+                // Update owner's shopId
+                val updatedOwner = persistedOwner.copy(shopId = newShopId)
+                repository.updateUser(updatedOwner)
+
+                // 3. Save both Shop and Owner to Firebase Firestore securely
+                launch(Dispatchers.IO) {
+                    try {
+                        FirestoreSyncService.pushShopToFirestore(persistedShop, updatedOwner)
+                        FirestoreSyncService.pushUserToFirestore(updatedOwner)
+                    } catch (e: Throwable) {
+                        android.util.Log.w("MainViewModel", "Notice: Firestore shop push: ${e.message}")
+                    }
+                }
+
+                // 4. Switch session to the newly created Shop Owner
+                authManager.switchUser(updatedOwner)
+                authManager.switchRole(UserRole.SHOP_OWNER)
+                resetShopOwnerOtpState()
+
+                screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
+                _currentScreen.value = Screen.ShopOwnerDashboard
+                _userMessage.value = "Shop '${persistedShop.name}' registered successfully! Welcome, ${updatedOwner.name}."
+                onComplete(true, "Shop created successfully")
+            } catch (e: Throwable) {
+                _shopOwnerAuthError.value = "Failed to register shop: ${e.message}"
+                onComplete(false, e.message ?: "Registration error")
+            } finally {
+                _isRegisteringShop.value = false
+            }
+        }
+    }
+
+    fun resetShopOwnerOtpState() {
+        _shopOwnerOtpCode.value = null
+        _shopOwnerOtpMobile.value = ""
+        _isShopOwnerOtpSent.value = false
+        _shopOwnerAuthError.value = null
+        _identifiedShopOwner.value = null
+        _isNewShopOwnerRegistration.value = false
+        _isRegisteringShop.value = false
+    }
+
     fun loginShopOwnerWithCredentials(phoneOrEmail: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
             val owner = authManager.loginAsShopOwner(phoneOrEmail)

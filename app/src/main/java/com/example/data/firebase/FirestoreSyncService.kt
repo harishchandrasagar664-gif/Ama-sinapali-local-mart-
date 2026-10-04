@@ -1,16 +1,24 @@
 package com.example.data.firebase
 
 import android.util.Log
+import com.example.data.local.SeedData
 import com.example.data.local.dao.MartDao
+import com.example.data.local.entities.NotificationEntity
 import com.example.data.local.entities.OrderEntity
 import com.example.data.local.entities.OrderItemEntity
 import com.example.domain.model.DeliveryType
+import com.example.domain.model.NotificationType
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.PaymentMethod
 import com.example.domain.model.PaymentStatus
+import com.example.domain.model.UserRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.android.gms.tasks.Tasks
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -214,6 +222,56 @@ object FirestoreSyncService {
         return root
     }
 
+    private fun getFieldDouble(fields: JSONObject, key: String, default: Double = 0.0): Double {
+        val obj = fields.optJSONObject(key) ?: return default
+        val d = obj.optDouble("doubleValue", Double.NaN)
+        if (!d.isNaN()) return d
+        val s = obj.optString("stringValue", "")
+        if (s.isNotBlank()) return s.toDoubleOrNull() ?: default
+        val i = obj.optString("integerValue", "")
+        if (i.isNotBlank()) return i.toDoubleOrNull() ?: default
+        return default
+    }
+
+    private fun getFieldLong(fields: JSONObject, key: String, default: Long = 0L): Long {
+        val obj = fields.optJSONObject(key) ?: return default
+        val i = obj.optString("integerValue", "")
+        if (i.isNotBlank()) return i.toLongOrNull() ?: default
+        val d = obj.optDouble("doubleValue", Double.NaN)
+        if (!d.isNaN()) return d.toLong()
+        val s = obj.optString("stringValue", "")
+        if (s.isNotBlank()) return s.toLongOrNull() ?: default
+        return default
+    }
+
+    private fun getFieldString(fields: JSONObject, key: String, default: String = ""): String {
+        val obj = fields.optJSONObject(key) ?: return default
+        return obj.optString("stringValue", default)
+    }
+
+    private fun getAnyDouble(doc: DocumentSnapshot, field: String, default: Double = 0.0): Double {
+        val v = try { doc.get(field) } catch (_: Throwable) { null } ?: return default
+        return when (v) {
+            is Number -> v.toDouble()
+            is String -> v.toDoubleOrNull() ?: default
+            else -> default
+        }
+    }
+
+    private fun getAnyLong(doc: DocumentSnapshot, field: String, default: Long = 0L): Long {
+        val v = try { doc.get(field) } catch (_: Throwable) { null } ?: return default
+        return when (v) {
+            is Number -> v.toLong()
+            is String -> v.toLongOrNull() ?: default
+            else -> default
+        }
+    }
+
+    private fun getAnyString(doc: DocumentSnapshot, field: String, default: String = ""): String {
+        val v = try { doc.get(field) } catch (_: Throwable) { null } ?: return default
+        return v.toString()
+    }
+
     /**
      * Parses a Firestore Document JSON response back into OrderEntity and List<OrderItemEntity>.
      */
@@ -221,26 +279,31 @@ object FirestoreSyncService {
         return try {
             val fields = documentJson.optJSONObject("fields") ?: return null
 
-            val orderNumber = fields.optJSONObject("orderNumber")?.optString("stringValue") ?: return null
-            if (orderNumber.isBlank()) return null
+            val docPath = documentJson.optString("name", "")
+            val docIdFallback = if (docPath.contains("/")) docPath.substringAfterLast("/") else ""
 
-            val userId = fields.optJSONObject("userId")?.optString("integerValue")?.toLongOrNull() ?: 0L
-            val shopId = fields.optJSONObject("shopId")?.optString("integerValue")?.toLongOrNull() ?: 1L
-            val customerName = fields.optJSONObject("customerName")?.optString("stringValue") ?: ""
-            val customerPhone = fields.optJSONObject("customerPhone")?.optString("stringValue") ?: ""
-            val deliveryAddress = fields.optJSONObject("deliveryAddress")?.optString("stringValue") ?: ""
-            val totalAmount = fields.optJSONObject("totalAmount")?.optDouble("doubleValue") ?: 0.0
-            val discountAmount = fields.optJSONObject("discountAmount")?.optDouble("doubleValue") ?: 0.0
-            val deliveryFee = fields.optJSONObject("deliveryFee")?.optDouble("doubleValue") ?: 0.0
-            val finalAmount = fields.optJSONObject("finalAmount")?.optDouble("doubleValue") ?: 0.0
-            val statusStr = fields.optJSONObject("status")?.optString("stringValue") ?: OrderStatus.PLACED.name
-            val deliveryTypeStr = fields.optJSONObject("deliveryType")?.optString("stringValue") ?: DeliveryType.HOME_DELIVERY.name
-            val paymentMethodStr = fields.optJSONObject("paymentMethod")?.optString("stringValue") ?: PaymentMethod.CASH_ON_DELIVERY.name
-            val paymentStatusStr = fields.optJSONObject("paymentStatus")?.optString("stringValue") ?: PaymentStatus.PENDING.name
-            val orderNotes = fields.optJSONObject("orderNotes")?.optString("stringValue") ?: ""
-            val placedAt = fields.optJSONObject("placedAt")?.optString("integerValue")?.toLongOrNull() ?: System.currentTimeMillis()
-            val deliveryAgent = fields.optJSONObject("deliveryAgentAssigned")?.optString("stringValue")?.ifBlank { null }
-            val estimatedDeliveryTime = fields.optJSONObject("estimatedDeliveryTime")?.optString("integerValue")?.toLongOrNull() ?: 0L
+            val orderNumber = getFieldString(fields, "orderNumber")
+                .ifBlank { docIdFallback.ifBlank { "ORD-SIN-${System.currentTimeMillis()}" } }
+
+            val userId = getFieldLong(fields, "userId", 0L)
+            val shopId = getFieldLong(fields, "shopId", 1L)
+            val customerName = getFieldString(fields, "customerName")
+            val customerPhone = getFieldString(fields, "customerPhone")
+            val deliveryAddress = getFieldString(fields, "deliveryAddress")
+            
+            val totalAmount = getFieldDouble(fields, "totalAmount", 0.0)
+            val discountAmount = getFieldDouble(fields, "discountAmount", 0.0)
+            val deliveryFee = getFieldDouble(fields, "deliveryFee", 0.0)
+            val finalAmount = getFieldDouble(fields, "finalAmount", (totalAmount - discountAmount + deliveryFee).coerceAtLeast(0.0))
+
+            val statusStr = getFieldString(fields, "status", OrderStatus.PLACED.name)
+            val deliveryTypeStr = getFieldString(fields, "deliveryType", DeliveryType.HOME_DELIVERY.name)
+            val paymentMethodStr = getFieldString(fields, "paymentMethod", PaymentMethod.CASH_ON_DELIVERY.name)
+            val paymentStatusStr = getFieldString(fields, "paymentStatus", PaymentStatus.PENDING.name)
+            val orderNotes = getFieldString(fields, "orderNotes")
+            val placedAt = getFieldLong(fields, "placedAt", System.currentTimeMillis())
+            val deliveryAgent = getFieldString(fields, "deliveryAgentAssigned").ifBlank { null }
+            val estimatedDeliveryTime = getFieldLong(fields, "estimatedDeliveryTime", 0L)
 
             val parsedStatus = try { OrderStatus.valueOf(statusStr) } catch (_: Throwable) { OrderStatus.PLACED }
             val parsedDeliveryType = try { DeliveryType.valueOf(deliveryTypeStr) } catch (_: Throwable) { DeliveryType.HOME_DELIVERY }
@@ -248,7 +311,7 @@ object FirestoreSyncService {
             val parsedPaymentStatus = try { PaymentStatus.valueOf(paymentStatusStr) } catch (_: Throwable) { PaymentStatus.PENDING }
 
             val orderEntity = OrderEntity(
-                id = 0L, // will be resolved locally
+                id = 0L,
                 orderNumber = orderNumber,
                 userId = userId,
                 shopId = shopId,
@@ -270,23 +333,25 @@ object FirestoreSyncService {
             )
 
             val itemsList = mutableListOf<OrderItemEntity>()
-            val itemsJsonStr = fields.optJSONObject("itemsJson")?.optString("stringValue")
-            if (!itemsJsonStr.isNullOrBlank()) {
-                val arr = JSONArray(itemsJsonStr)
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    itemsList.add(
-                        OrderItemEntity(
-                            id = 0L,
-                            orderId = 0L,
-                            productId = obj.optLong("productId", 0L),
-                            productName = obj.optString("productName", ""),
-                            unitPrice = obj.optDouble("unitPrice", 0.0),
-                            quantity = obj.optInt("quantity", 1),
-                            totalPrice = obj.optDouble("totalPrice", 0.0)
+            val itemsJsonStr = getFieldString(fields, "itemsJson")
+            if (itemsJsonStr.isNotBlank()) {
+                try {
+                    val arr = JSONArray(itemsJsonStr)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        itemsList.add(
+                            OrderItemEntity(
+                                id = 0L,
+                                orderId = 0L,
+                                productId = obj.optLong("productId", 0L),
+                                productName = obj.optString("productName", ""),
+                                unitPrice = obj.optDouble("unitPrice", 0.0),
+                                quantity = obj.optInt("quantity", 1),
+                                totalPrice = obj.optDouble("totalPrice", 0.0)
+                            )
                         )
-                    )
-                }
+                    }
+                } catch (_: Throwable) { }
             }
 
             Pair(orderEntity, itemsList)
@@ -297,11 +362,200 @@ object FirestoreSyncService {
     }
 
     /**
-     * Pushes a newly placed order to Firebase Firestore.
+     * Converts an OrderEntity and its items to a Map suitable for the Firebase Firestore SDK.
+     */
+    fun orderToMap(order: OrderEntity, items: List<OrderItemEntity>): Map<String, Any> {
+        val map = mutableMapOf<String, Any>()
+        map["orderNumber"] = order.orderNumber
+        map["userId"] = order.userId
+        map["shopId"] = order.shopId
+        map["customerName"] = order.customerName
+        map["customerPhone"] = order.customerPhone
+        map["deliveryAddress"] = order.deliveryAddress
+        map["totalAmount"] = order.totalAmount
+        map["discountAmount"] = order.discountAmount
+        map["deliveryFee"] = order.deliveryFee
+        map["finalAmount"] = order.finalAmount
+        map["status"] = order.status.name
+        map["deliveryType"] = order.deliveryType.name
+        map["paymentMethod"] = order.paymentMethod.name
+        map["paymentStatus"] = order.paymentStatus.name
+        map["orderNotes"] = order.orderNotes
+        map["placedAt"] = order.placedAt
+        map["deliveryAgentAssigned"] = order.deliveryAgentAssigned ?: ""
+        map["estimatedDeliveryTime"] = order.estimatedDeliveryTime
+        map["syncedAt"] = System.currentTimeMillis()
+
+        val itemsArray = JSONArray()
+        val itemsList = items.map { item ->
+            val itemObj = JSONObject()
+            itemObj.put("productId", item.productId)
+            itemObj.put("productName", item.productName)
+            itemObj.put("unitPrice", item.unitPrice)
+            itemObj.put("quantity", item.quantity)
+            itemObj.put("totalPrice", item.totalPrice)
+            itemsArray.put(itemObj)
+
+            mapOf(
+                "productId" to item.productId,
+                "productName" to item.productName,
+                "unitPrice" to item.unitPrice,
+                "quantity" to item.quantity,
+                "totalPrice" to item.totalPrice
+            )
+        }
+        map["items"] = itemsList
+        map["itemsJson"] = itemsArray.toString()
+        return map
+    }
+
+    /**
+     * Parses a Firebase SDK DocumentSnapshot back into OrderEntity and List<OrderItemEntity>.
+     */
+    fun firestoreDocToOrder(doc: DocumentSnapshot): Pair<OrderEntity, List<OrderItemEntity>>? {
+        return try {
+            val orderNumber = getAnyString(doc, "orderNumber").ifBlank { doc.id }
+            if (orderNumber.isBlank()) return null
+
+            val userId = getAnyLong(doc, "userId", 0L)
+            val shopId = getAnyLong(doc, "shopId", 1L)
+            val customerName = getAnyString(doc, "customerName")
+            val customerPhone = getAnyString(doc, "customerPhone")
+            val deliveryAddress = getAnyString(doc, "deliveryAddress")
+            val totalAmount = getAnyDouble(doc, "totalAmount", 0.0)
+            val discountAmount = getAnyDouble(doc, "discountAmount", 0.0)
+            val deliveryFee = getAnyDouble(doc, "deliveryFee", 0.0)
+            val finalAmount = getAnyDouble(doc, "finalAmount", (totalAmount - discountAmount + deliveryFee).coerceAtLeast(0.0))
+            val statusStr = getAnyString(doc, "status", OrderStatus.PLACED.name)
+            val deliveryTypeStr = getAnyString(doc, "deliveryType", DeliveryType.HOME_DELIVERY.name)
+            val paymentMethodStr = getAnyString(doc, "paymentMethod", PaymentMethod.CASH_ON_DELIVERY.name)
+            val paymentStatusStr = getAnyString(doc, "paymentStatus", PaymentStatus.PENDING.name)
+            val orderNotes = getAnyString(doc, "orderNotes")
+            val placedAt = getAnyLong(doc, "placedAt", System.currentTimeMillis())
+            val deliveryAgent = getAnyString(doc, "deliveryAgentAssigned").ifBlank { null }
+            val estimatedDeliveryTime = getAnyLong(doc, "estimatedDeliveryTime", 0L)
+
+            val parsedStatus = try { OrderStatus.valueOf(statusStr) } catch (_: Throwable) { OrderStatus.PLACED }
+            val parsedDeliveryType = try { DeliveryType.valueOf(deliveryTypeStr) } catch (_: Throwable) { DeliveryType.HOME_DELIVERY }
+            val parsedPaymentMethod = try { PaymentMethod.valueOf(paymentMethodStr) } catch (_: Throwable) { PaymentMethod.CASH_ON_DELIVERY }
+            val parsedPaymentStatus = try { PaymentStatus.valueOf(paymentStatusStr) } catch (_: Throwable) { PaymentStatus.PENDING }
+
+            val orderEntity = OrderEntity(
+                id = 0L,
+                orderNumber = orderNumber,
+                userId = userId,
+                shopId = shopId,
+                totalAmount = totalAmount,
+                discountAmount = discountAmount,
+                deliveryFee = deliveryFee,
+                finalAmount = finalAmount,
+                status = parsedStatus,
+                deliveryType = parsedDeliveryType,
+                paymentMethod = parsedPaymentMethod,
+                paymentStatus = parsedPaymentStatus,
+                deliveryAddress = deliveryAddress,
+                customerPhone = customerPhone,
+                customerName = customerName,
+                orderNotes = orderNotes,
+                placedAt = placedAt,
+                deliveryAgentAssigned = deliveryAgent,
+                estimatedDeliveryTime = estimatedDeliveryTime
+            )
+
+            val itemsList = mutableListOf<OrderItemEntity>()
+            val rawItems = doc.get("items") as? List<*>
+            if (!rawItems.isNullOrEmpty()) {
+                for (raw in rawItems) {
+                    val itemMap = raw as? Map<*, *> ?: continue
+                    val pId = (itemMap["productId"] as? Number)?.toLong()
+                        ?: (itemMap["productId"]?.toString()?.toLongOrNull() ?: 0L)
+                    val pName = itemMap["productName"]?.toString() ?: ""
+                    val uPrice = (itemMap["unitPrice"] as? Number)?.toDouble()
+                        ?: (itemMap["unitPrice"]?.toString()?.toDoubleOrNull() ?: 0.0)
+                    val qty = (itemMap["quantity"] as? Number)?.toInt()
+                        ?: (itemMap["quantity"]?.toString()?.toIntOrNull() ?: 1)
+                    val tPrice = (itemMap["totalPrice"] as? Number)?.toDouble()
+                        ?: (itemMap["totalPrice"]?.toString()?.toDoubleOrNull() ?: (uPrice * qty))
+
+                    itemsList.add(
+                        OrderItemEntity(
+                            id = 0L,
+                            orderId = 0L,
+                            productId = pId,
+                            productName = pName,
+                            unitPrice = uPrice,
+                            quantity = qty,
+                            totalPrice = tPrice
+                        )
+                    )
+                }
+            }
+
+            if (itemsList.isEmpty()) {
+                val itemsJsonStr = getAnyString(doc, "itemsJson")
+                if (itemsJsonStr.isNotBlank()) {
+                    try {
+                        val arr = JSONArray(itemsJsonStr)
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            itemsList.add(
+                                OrderItemEntity(
+                                    id = 0L,
+                                    orderId = 0L,
+                                    productId = obj.optLong("productId", 0L),
+                                    productName = obj.optString("productName", ""),
+                                    unitPrice = obj.optDouble("unitPrice", 0.0),
+                                    quantity = obj.optInt("quantity", 1),
+                                    totalPrice = obj.optDouble("totalPrice", 0.0)
+                                )
+                            )
+                        }
+                    } catch (_: Throwable) { }
+                }
+            }
+
+            Pair(orderEntity, itemsList)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to parse Firestore doc snapshot: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Pushes a newly placed order to Firebase Firestore using Firebase SDK and REST API.
      */
     suspend fun pushOrderToFirestore(order: OrderEntity, items: List<OrderItemEntity>): Boolean = withContext(Dispatchers.IO) {
         if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
 
+        var sdkSaved = false
+        // Tier 1: Save directly to Firebase Firestore SDK (persists to cache and queues upload)
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val map = orderToMap(order, items)
+            val docRef = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                .document(order.orderNumber)
+            val setTask = docRef.set(map)
+            try {
+                Tasks.await(setTask, 4, TimeUnit.SECONDS)
+                sdkSaved = true
+            } catch (te: Exception) {
+                // In Firestore SDK, docRef.set() is immediately committed to local offline cache
+                // and queued for cloud synchronization
+                sdkSaved = true
+            }
+            Log.i(TAG, "Order #${order.orderNumber} successfully pushed via Firebase SDK")
+        } catch (e: Throwable) {
+            Log.w(TAG, "Firebase SDK direct push notice: ${e.message}")
+            try {
+                FirebaseFirestore.getInstance()
+                    .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .document(order.orderNumber)
+                    .set(orderToMap(order, items))
+                sdkSaved = true
+            } catch (_: Throwable) { }
+        }
+
+        // Tier 2: Direct REST PATCH for cloud endpoint verification
         try {
             val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
             val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}/${order.orderNumber}$keyParam"
@@ -310,10 +564,12 @@ object FirestoreSyncService {
             val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "PATCH"
-            conn.connectTimeout = FirebaseSyncConfig.CONNECTION_TIMEOUT_MS
-            conn.readTimeout = FirebaseSyncConfig.READ_TIMEOUT_MS
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
+            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
 
             OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
                 writer.write(payload.toString())
@@ -322,12 +578,13 @@ object FirestoreSyncService {
 
             val code = conn.responseCode
             conn.disconnect()
-            Log.d(TAG, "Firestore sync push order response code: $code for ${order.orderNumber}")
-            code in 200..299
+            Log.d(TAG, "Firestore REST push response: $code for ${order.orderNumber}")
+            if (code in 200..299) return@withContext true
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore direct push skipped/fallback: ${e.message}")
-            false
+            Log.w(TAG, "Notice: Firestore REST push: ${e.message}")
         }
+
+        sdkSaved
     }
 
     /**
@@ -335,6 +592,27 @@ object FirestoreSyncService {
      */
     suspend fun updateOrderStatusInFirestore(orderNumber: String, status: OrderStatus): Boolean = withContext(Dispatchers.IO) {
         if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+
+        var sdkUpdated = false
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .document(orderNumber)
+                    .update(mapOf("status" to status.name, "syncedAt" to System.currentTimeMillis())),
+                4,
+                TimeUnit.SECONDS
+            )
+            sdkUpdated = true
+        } catch (e: Throwable) {
+            try {
+                FirebaseFirestore.getInstance()
+                    .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .document(orderNumber)
+                    .update(mapOf("status" to status.name, "syncedAt" to System.currentTimeMillis()))
+                sdkUpdated = true
+            } catch (_: Throwable) { }
+        }
 
         try {
             val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
@@ -347,10 +625,11 @@ object FirestoreSyncService {
             val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "PATCH"
-            conn.connectTimeout = FirebaseSyncConfig.CONNECTION_TIMEOUT_MS
-            conn.readTimeout = FirebaseSyncConfig.READ_TIMEOUT_MS
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
 
             OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
                 writer.write(payload.toString())
@@ -359,11 +638,178 @@ object FirestoreSyncService {
 
             val code = conn.responseCode
             conn.disconnect()
-            code in 200..299
+            if (code in 200..299) return@withContext true
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore status update fallback: ${e.message}")
-            false
+            Log.w(TAG, "Notice: Firestore REST status update: ${e.message}")
         }
+
+        sdkUpdated
+    }
+
+    /**
+     * Saves a newly registered or updated shop to Firebase Firestore.
+     */
+    suspend fun pushShopToFirestore(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): Boolean = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+
+        var sdkSaved = false
+        val docId = if (shop.phone.isNotBlank()) "shop_${shop.phone.trim()}" else "shop_${shop.id}"
+        val map = mutableMapOf<String, Any>(
+            "id" to shop.id,
+            "ownerId" to shop.ownerId,
+            "name" to shop.name,
+            "category" to shop.category,
+            "address" to shop.address,
+            "phone" to shop.phone,
+            "upiId" to shop.upiId,
+            "rating" to shop.rating,
+            "reviewCount" to shop.reviewCount,
+            "isOpen" to shop.isOpen,
+            "deliveryAvailable" to shop.deliveryAvailable,
+            "minOrderAmount" to shop.minOrderAmount,
+            "estimatedDeliveryMins" to shop.estimatedDeliveryMins,
+            "isApproved" to shop.isApproved,
+            "imageUrl" to shop.imageUrl,
+            "ownerName" to (owner?.name ?: ""),
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        // Tier 1: Firebase SDK
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).document(docId).set(map)
+            try {
+                Tasks.await(task, 4, TimeUnit.SECONDS)
+                sdkSaved = true
+            } catch (_: Exception) {
+                sdkSaved = true
+            }
+            Log.i(TAG, "Shop '${shop.name}' pushed via Firebase SDK")
+        } catch (e: Throwable) {
+            Log.w(TAG, "Firebase SDK shop push notice: ${e.message}")
+            try {
+                FirebaseFirestore.getInstance().collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                    .document(docId).set(map)
+                sdkSaved = true
+            } catch (_: Throwable) { }
+        }
+
+        // Tier 2: REST PATCH
+        try {
+            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
+            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId$keyParam"
+            val fields = JSONObject()
+            fields.put("name", JSONObject().put("stringValue", shop.name))
+            fields.put("category", JSONObject().put("stringValue", shop.category))
+            fields.put("address", JSONObject().put("stringValue", shop.address))
+            fields.put("phone", JSONObject().put("stringValue", shop.phone))
+            fields.put("imageUrl", JSONObject().put("stringValue", shop.imageUrl))
+            fields.put("upiId", JSONObject().put("stringValue", shop.upiId))
+            fields.put("ownerName", JSONObject().put("stringValue", owner?.name ?: ""))
+            fields.put("isOpen", JSONObject().put("booleanValue", shop.isOpen))
+            fields.put("deliveryAvailable", JSONObject().put("booleanValue", shop.deliveryAvailable))
+            fields.put("ownerId", JSONObject().put("integerValue", shop.ownerId.toString()))
+            val payload = JSONObject().put("fields", fields)
+
+            val url = URL(urlString)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "PATCH"
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
+            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
+
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(payload.toString())
+                writer.flush()
+            }
+
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code in 200..299) return@withContext true
+        } catch (e: Throwable) {
+            Log.w(TAG, "Notice: Firestore REST shop push: ${e.message}")
+        }
+
+        sdkSaved
+    }
+
+    /**
+     * Saves a user account to Firebase Firestore.
+     */
+    suspend fun pushUserToFirestore(user: com.example.data.local.entities.UserEntity): Boolean = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+
+        val docId = if (user.phone.isNotBlank()) "user_${user.phone.trim()}" else "user_${user.id}"
+        val map = mutableMapOf<String, Any>(
+            "id" to user.id,
+            "name" to user.name,
+            "phone" to user.phone,
+            "email" to user.email,
+            "role" to user.role.name,
+            "shopId" to (user.shopId ?: 0L),
+            "isVerified" to user.isVerified,
+            "deliveryAddress" to user.deliveryAddress,
+            "district" to user.district,
+            "block" to user.block,
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        var sdkSaved = false
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(docId).set(map)
+            try {
+                Tasks.await(task, 4, TimeUnit.SECONDS)
+                sdkSaved = true
+            } catch (_: Exception) {
+                sdkSaved = true
+            }
+            Log.i(TAG, "User '${user.name}' (${user.role.name}) pushed via Firebase SDK")
+        } catch (e: Throwable) {
+            Log.w(TAG, "Firebase SDK user push notice: ${e.message}")
+        }
+
+        // Tier 2: REST fallback for guaranteed persistence
+        try {
+            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
+            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_USERS}/$docId$keyParam"
+            val fields = JSONObject()
+            fields.put("name", JSONObject().put("stringValue", user.name))
+            fields.put("phone", JSONObject().put("stringValue", user.phone))
+            fields.put("email", JSONObject().put("stringValue", user.email))
+            fields.put("role", JSONObject().put("stringValue", user.role.name))
+            fields.put("shopId", JSONObject().put("integerValue", (user.shopId ?: 0L).toString()))
+            fields.put("isVerified", JSONObject().put("booleanValue", user.isVerified))
+            fields.put("deliveryAddress", JSONObject().put("stringValue", user.deliveryAddress))
+            fields.put("district", JSONObject().put("stringValue", user.district))
+            fields.put("block", JSONObject().put("stringValue", user.block))
+            val payload = JSONObject().put("fields", fields)
+
+            val url = URL(urlString)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "PATCH"
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
+            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
+
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(payload.toString())
+                writer.flush()
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code in 200..299) return@withContext true
+        } catch (e: Throwable) {
+            Log.w(TAG, "Notice: Firestore REST user push: ${e.message}")
+        }
+
+        sdkSaved
     }
 
     /**
@@ -377,25 +823,33 @@ object FirestoreSyncService {
         var uploadedCount = 0
         var downloadedCount = 0
 
-        // 1. Fetch remote orders from Firestore or fallbacks
+        // 1. Fetch remote orders from Firestore (SDK first, REST fallback)
         val cloudOrders = fetchCloudOrdersInternal()
         for ((remoteOrder, remoteItems) in cloudOrders) {
             val existingLocal = dao.getOrderByOrderNumber(remoteOrder.orderNumber)
             if (existingLocal == null) {
                 // New order placed on another device: insert locally into Room!
                 val newLocalId = dao.insertOrder(remoteOrder.copy(id = 0L))
-                if (remoteItems.isNotEmpty()) {
-                    val assignedItems = remoteItems.map { it.copy(id = 0L, orderId = newLocalId) }
-                    dao.insertOrderItems(assignedItems)
-                }
+                val assignedItems = if (remoteItems.isNotEmpty()) {
+                    val list = remoteItems.map { it.copy(id = 0L, orderId = newLocalId) }
+                    dao.insertOrderItems(list)
+                    list
+                } else emptyList()
                 downloadedCount++
                 Log.d(TAG, "Synced new cloud order into local Room: ${remoteOrder.orderNumber}")
+                notifyCloudOrderReceived(dao, remoteOrder, assignedItems.ifEmpty { remoteItems })
             } else {
                 // Existing order: update status if cloud has changed
                 if (existingLocal.status != remoteOrder.status) {
                     dao.updateOrderStatus(existingLocal.id, remoteOrder.status)
                     downloadedCount++
                     Log.d(TAG, "Updated local order status from cloud: ${remoteOrder.orderNumber} -> ${remoteOrder.status}")
+                }
+                // Backfill order items if missing locally
+                val existingItems = dao.getOrderItems(existingLocal.id).first()
+                if (existingItems.isEmpty() && remoteItems.isNotEmpty()) {
+                    val list = remoteItems.map { it.copy(id = 0L, orderId = existingLocal.id) }
+                    dao.insertOrderItems(list)
                 }
             }
         }
@@ -423,20 +877,133 @@ object FirestoreSyncService {
         )
     }
 
+    private suspend fun notifyCloudOrderReceived(
+        dao: MartDao,
+        order: OrderEntity,
+        items: List<OrderItemEntity>
+    ) {
+        try {
+            val allUsers = dao.getAllUsersSync()
+            val itemsByShop = mutableMapOf<Long, MutableList<OrderItemEntity>>()
+            for (item in items) {
+                val prod = dao.getProductByIdSync(item.productId) ?: SeedData.products.find { it.id == item.productId }
+                val sId = prod?.shopId ?: order.shopId
+                itemsByShop.getOrPut(sId) { mutableListOf() }.add(item)
+            }
+            if (itemsByShop.isEmpty()) {
+                itemsByShop[order.shopId] = items.toMutableList()
+            }
+
+            val allShopNames = mutableListOf<String>()
+            for ((sId, shopItems) in itemsByShop) {
+                val shop = dao.getShopByIdSync(sId) ?: SeedData.shops.find { it.id == sId }
+                val shopName = shop?.name ?: "Shop #$sId"
+                allShopNames.add(shopName)
+
+                val targetOwnerUserIds = mutableSetOf<Long>()
+                if (shop != null && shop.ownerId > 0) targetOwnerUserIds.add(shop.ownerId)
+                for (u in allUsers) {
+                    if (u.role == UserRole.SHOP_OWNER) {
+                        if ((shop != null && u.id == shop.ownerId) || u.shopId == sId || (shop != null && u.phone.isNotBlank() && u.phone == shop.phone)) {
+                            targetOwnerUserIds.add(u.id)
+                        }
+                    }
+                }
+                for (so in SeedData.shopOwners) {
+                    if ((shop != null && so.id == shop.ownerId) || so.shopId == sId || (shop != null && so.phone.isNotBlank() && so.phone == shop.phone)) {
+                        targetOwnerUserIds.add(so.id)
+                    }
+                }
+                if (targetOwnerUserIds.isEmpty()) targetOwnerUserIds.add(shop?.ownerId ?: sId)
+
+                val itemsSummary = if (shopItems.isNotEmpty()) shopItems.joinToString(", ") { "${it.quantity}x ${it.productName}" } else "Order #${order.orderNumber}"
+                val shopTotal = if (shopItems.isNotEmpty()) shopItems.sumOf { it.totalPrice } else order.finalAmount
+                val notifTitle = "New Order #${order.orderNumber} for $shopName! 🛍️"
+                val notifMessage = "Customer ${order.customerName} (${order.customerPhone}) ordered: $itemsSummary. Total: ₹${shopTotal.toInt()} (${order.paymentMethod.name.replace('_', ' ')}). Please accept & prepare items for delivery."
+
+                for (ownerUserId in targetOwnerUserIds) {
+                    dao.insertNotification(
+                        NotificationEntity(
+                            userId = ownerUserId,
+                            title = notifTitle,
+                            message = notifMessage,
+                            type = NotificationType.ORDER_STATUS,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+
+            val allShopNamesSummary = allShopNames.distinct().joinToString(", ").ifEmpty { "Sinapali Mart" }
+            val allProductsSummary = if (items.isNotEmpty()) items.joinToString(", ") { "${it.quantity}x ${it.productName}" } else "Order #${order.orderNumber}"
+            dao.insertNotification(
+                NotificationEntity(
+                    userId = SeedData.adminUser.id,
+                    title = "New Town Order #${order.orderNumber} ($allShopNamesSummary)",
+                    message = "New order of ₹${order.finalAmount.toInt()} from ${order.customerName} for $allShopNamesSummary. Items: $allProductsSummary.",
+                    type = NotificationType.ORDER_STATUS,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "Notice creating cloud order notification: ${e.message}")
+        }
+    }
+
     fun fetchOrdersFromFirestore(): List<Pair<OrderEntity, List<OrderItemEntity>>> {
         return fetchCloudOrdersInternal()
     }
 
     fun fetchCloudOrdersInternal(): List<Pair<OrderEntity, List<OrderItemEntity>>> {
         val result = mutableListOf<Pair<OrderEntity, List<OrderItemEntity>>>()
+
+        // Tier 1: Try Firebase SDK (Server first)
         try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}$keyParam"
+            val firestore = FirebaseFirestore.getInstance()
+            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS).get()
+            val snapshot = Tasks.await(task, 4, TimeUnit.SECONDS)
+            if (snapshot != null) {
+                for (doc in snapshot.documents) {
+                    val parsed = firestoreDocToOrder(doc)
+                    if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
+                        result.add(parsed)
+                    }
+                }
+                if (result.isNotEmpty()) {
+                    Log.i(TAG, "Fetched ${result.size} orders via Firebase SDK")
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Notice: Firestore SDK query: ${e.message}")
+        }
+
+        // Always check local Firestore persistence cache to include offline-queued or cached orders
+        try {
+            val cacheTask = FirebaseFirestore.getInstance()
+                .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                .get(com.google.firebase.firestore.Source.CACHE)
+            val cacheSnapshot = Tasks.await(cacheTask, 2, TimeUnit.SECONDS)
+            if (cacheSnapshot != null) {
+                for (doc in cacheSnapshot.documents) {
+                    val parsed = firestoreDocToOrder(doc)
+                    if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
+                        result.add(parsed)
+                    }
+                }
+            }
+        } catch (_: Throwable) { }
+
+        // Tier 2: Try Firestore REST with pageSize=300
+        try {
+            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
+            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}?pageSize=300$keyParam"
             val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
-            conn.connectTimeout = FirebaseSyncConfig.CONNECTION_TIMEOUT_MS
-            conn.readTimeout = FirebaseSyncConfig.READ_TIMEOUT_MS
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
+            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
 
             val code = conn.responseCode
             if (code in 200..299) {
@@ -448,7 +1015,9 @@ object FirestoreSyncService {
                         val doc = documents.optJSONObject(i)
                         if (doc != null) {
                             val parsed = firestorePayloadToOrder(doc)
-                            if (parsed != null) result.add(parsed)
+                            if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
+                                result.add(parsed)
+                            }
                         }
                     }
                 }
