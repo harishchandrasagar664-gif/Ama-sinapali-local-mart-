@@ -246,8 +246,7 @@ fun CustomerHomeScreen(
                     val isCustomerActive = viewModel.authManager.isCustomerSessionActive() || (user?.isVerified == true && user?.id != null)
                     TextButton(
                         onClick = {
-                            if (isCustomerActive) viewModel.navigateTo(Screen.CustomerProfile)
-                            else viewModel.navigateTo(Screen.CustomerAuth)
+                            viewModel.navigateTo(Screen.CustomerProfile)
                         },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {

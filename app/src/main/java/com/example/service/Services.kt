@@ -42,6 +42,7 @@ class AuthManager(
 ) {
     companion object {
         private const val PREFS_NAME = "ama_sinapali_customer_session"
+        // Customer session keys
         private const val KEY_SAVED_CUSTOMER_ID = "saved_customer_id"
         private const val KEY_IS_LOGGED_IN = "is_customer_logged_in"
         private const val KEY_CUSTOMER_NAME = "saved_customer_name"
@@ -54,6 +55,23 @@ class AuthManager(
         private const val KEY_CUSTOMER_ADDRESS = "saved_customer_address"
         private const val KEY_CUSTOMER_PHOTO_URI = "saved_customer_photo_uri"
         private const val KEY_CUSTOMER_VERIFIED = "saved_customer_verified"
+
+        // Shop Owner session keys
+        private const val KEY_SAVED_SHOP_OWNER_ID = "saved_shop_owner_id"
+        private const val KEY_IS_SHOP_OWNER_LOGGED_IN = "is_shop_owner_logged_in"
+        private const val KEY_SHOP_OWNER_NAME = "saved_shop_owner_name"
+        private const val KEY_SHOP_OWNER_PHONE = "saved_shop_owner_phone"
+        private const val KEY_SHOP_OWNER_EMAIL = "saved_shop_owner_email"
+        private const val KEY_SHOP_OWNER_SHOP_ID = "saved_shop_owner_shop_id"
+        private const val KEY_SHOP_OWNER_DISTRICT = "saved_shop_owner_district"
+        private const val KEY_SHOP_OWNER_BLOCK = "saved_shop_owner_block"
+        private const val KEY_SHOP_OWNER_GP = "saved_shop_owner_gp"
+        private const val KEY_SHOP_OWNER_VILLAGE = "saved_shop_owner_village"
+        private const val KEY_SHOP_OWNER_ADDRESS = "saved_shop_owner_address"
+        private const val KEY_SHOP_OWNER_PHOTO_URI = "saved_shop_owner_photo_uri"
+
+        // Last active role
+        private const val KEY_LAST_ACTIVE_ROLE = "last_active_role"
     }
 
     private val prefs: SharedPreferences? = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -90,26 +108,97 @@ class AuthManager(
         )
     }
 
+    private fun restoreShopOwnerSync(): UserEntity? {
+        val isLoggedIn = prefs?.getBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, false) ?: false
+        val savedId = prefs?.getLong(KEY_SAVED_SHOP_OWNER_ID, -1L) ?: -1L
+        val phone = prefs?.getString(KEY_SHOP_OWNER_PHONE, null) ?: ""
+        if (!isLoggedIn || (savedId <= 0 && phone.isBlank())) return null
+
+        val name = prefs.getString(KEY_SHOP_OWNER_NAME, null) ?: "Shop Owner"
+        val email = prefs.getString(KEY_SHOP_OWNER_EMAIL, null) ?: ""
+        val shopId = prefs.getLong(KEY_SHOP_OWNER_SHOP_ID, -1L)
+        val district = prefs.getString(KEY_SHOP_OWNER_DISTRICT, null) ?: "Nuapada"
+        val block = prefs.getString(KEY_SHOP_OWNER_BLOCK, null) ?: "Sinapali"
+        val gp = prefs.getString(KEY_SHOP_OWNER_GP, null) ?: "Sinapali"
+        val village = prefs.getString(KEY_SHOP_OWNER_VILLAGE, null) ?: "Sinapali"
+        val address = prefs.getString(KEY_SHOP_OWNER_ADDRESS, null) ?: "Sinapali Main Market"
+        val photoUri = prefs.getString(KEY_SHOP_OWNER_PHOTO_URI, null)
+
+        return UserEntity(
+            id = if (savedId > 0) savedId else 0L,
+            name = name,
+            phone = phone,
+            email = email,
+            role = UserRole.SHOP_OWNER,
+            shopId = if (shopId > 0) shopId else null,
+            isVerified = true,
+            district = district,
+            block = block,
+            gp = gp,
+            village = village,
+            deliveryAddress = address,
+            profilePhotoUri = photoUri
+        )
+    }
+
+    private val syncShopOwner: UserEntity? = restoreShopOwnerSync()
     private val syncCustomer: UserEntity? = restoreCustomerSync()
+
+    private var activeShopOwner: UserEntity? = syncShopOwner
     private var activeCustomer: UserEntity? = syncCustomer
 
-    private val _currentUser = MutableStateFlow<UserEntity?>(syncCustomer ?: SeedData.customers[0])
+    private val initialRole: UserRole = if (syncShopOwner != null && prefs?.getBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, false) == true) {
+        UserRole.SHOP_OWNER
+    } else {
+        UserRole.CUSTOMER
+    }
+
+    private val _currentUser = MutableStateFlow<UserEntity?>(
+        if (initialRole == UserRole.SHOP_OWNER) (syncShopOwner ?: SeedData.shopOwners[0])
+        else (syncCustomer ?: SeedData.customers[0])
+    )
     val currentUser: StateFlow<UserEntity?> = _currentUser.asStateFlow()
 
-    private val _currentRole = MutableStateFlow<UserRole>(UserRole.CUSTOMER)
+    private val _currentRole = MutableStateFlow<UserRole>(initialRole)
     val currentRole: StateFlow<UserRole> = _currentRole.asStateFlow()
 
     fun restoreSession(scope: CoroutineScope) {
-        val savedId = prefs?.getLong(KEY_SAVED_CUSTOMER_ID, -1L) ?: -1L
-        val isLoggedIn = prefs?.getBoolean(KEY_IS_LOGGED_IN, false) ?: false
-        if (isLoggedIn && savedId > 0) {
-            scope.launch(Dispatchers.IO) {
-                val dbUser = repository.getUserById(savedId)
+        val isShopOwnerLoggedIn = prefs?.getBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, false) ?: false
+        val savedShopOwnerId = prefs?.getLong(KEY_SAVED_SHOP_OWNER_ID, -1L) ?: -1L
+        val savedShopOwnerPhone = prefs?.getString(KEY_SHOP_OWNER_PHONE, "") ?: ""
+
+        val isCustLoggedIn = prefs?.getBoolean(KEY_IS_LOGGED_IN, false) ?: false
+        val savedCustId = prefs?.getLong(KEY_SAVED_CUSTOMER_ID, -1L) ?: -1L
+
+        scope.launch(Dispatchers.IO) {
+            // Restore Shop Owner from DB if logged in
+            if (isShopOwnerLoggedIn) {
+                var dbOwner = if (savedShopOwnerId > 0) repository.getUserById(savedShopOwnerId) else null
+                if (dbOwner == null && savedShopOwnerPhone.isNotBlank()) {
+                    dbOwner = repository.getUserByPhone(savedShopOwnerPhone)
+                }
+                if (dbOwner != null && dbOwner.role == UserRole.SHOP_OWNER) {
+                    val verifiedOwner = dbOwner.copy(isVerified = true)
+                    activeShopOwner = verifiedOwner
+                    if (_currentRole.value == UserRole.SHOP_OWNER) {
+                        _currentUser.value = verifiedOwner
+                    }
+                } else if (activeShopOwner != null) {
+                    val id = repository.insertUser(activeShopOwner!!)
+                    activeShopOwner = activeShopOwner!!.copy(id = id)
+                    prefs?.edit()?.putLong(KEY_SAVED_SHOP_OWNER_ID, id)?.apply()
+                }
+            }
+
+            // Restore Customer from DB if logged in
+            if (isCustLoggedIn && savedCustId > 0) {
+                val dbUser = repository.getUserById(savedCustId)
                 if (dbUser != null && dbUser.role == UserRole.CUSTOMER) {
                     val verifiedDbUser = dbUser.copy(isVerified = true)
                     activeCustomer = verifiedDbUser
-                    _currentUser.value = verifiedDbUser
-                    _currentRole.value = UserRole.CUSTOMER
+                    if (_currentRole.value == UserRole.CUSTOMER) {
+                        _currentUser.value = verifiedDbUser
+                    }
                     if (!dbUser.isVerified) {
                         repository.updateUser(verifiedDbUser)
                     }
@@ -118,6 +207,67 @@ class AuthManager(
                 }
             }
         }
+    }
+
+    fun persistShopOwnerSession(user: UserEntity) {
+        val verifiedUser = user.copy(role = UserRole.SHOP_OWNER, isVerified = true)
+        activeShopOwner = verifiedUser
+        prefs?.edit()
+            ?.putBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, true)
+            ?.putLong(KEY_SAVED_SHOP_OWNER_ID, verifiedUser.id)
+            ?.putString(KEY_SHOP_OWNER_NAME, verifiedUser.name)
+            ?.putString(KEY_SHOP_OWNER_PHONE, verifiedUser.phone)
+            ?.putString(KEY_SHOP_OWNER_EMAIL, verifiedUser.email)
+            ?.putLong(KEY_SHOP_OWNER_SHOP_ID, verifiedUser.shopId ?: -1L)
+            ?.putString(KEY_SHOP_OWNER_DISTRICT, verifiedUser.district)
+            ?.putString(KEY_SHOP_OWNER_BLOCK, verifiedUser.block)
+            ?.putString(KEY_SHOP_OWNER_GP, verifiedUser.gp)
+            ?.putString(KEY_SHOP_OWNER_VILLAGE, verifiedUser.village)
+            ?.putString(KEY_SHOP_OWNER_ADDRESS, verifiedUser.deliveryAddress)
+            ?.putString(KEY_SHOP_OWNER_PHOTO_URI, verifiedUser.profilePhotoUri)
+            ?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")
+            ?.commit()
+    }
+
+    fun clearShopOwnerSession() {
+        prefs?.edit()
+            ?.putBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, false)
+            ?.remove(KEY_SAVED_SHOP_OWNER_ID)
+            ?.remove(KEY_SHOP_OWNER_NAME)
+            ?.remove(KEY_SHOP_OWNER_PHONE)
+            ?.remove(KEY_SHOP_OWNER_EMAIL)
+            ?.remove(KEY_SHOP_OWNER_SHOP_ID)
+            ?.remove(KEY_SHOP_OWNER_DISTRICT)
+            ?.remove(KEY_SHOP_OWNER_BLOCK)
+            ?.remove(KEY_SHOP_OWNER_GP)
+            ?.remove(KEY_SHOP_OWNER_VILLAGE)
+            ?.remove(KEY_SHOP_OWNER_ADDRESS)
+            ?.remove(KEY_SHOP_OWNER_PHOTO_URI)
+            ?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")
+            ?.commit()
+        activeShopOwner = null
+    }
+
+    fun isShopOwnerSessionActive(): Boolean {
+        val hasActiveOwner = activeShopOwner != null && activeShopOwner?.role == UserRole.SHOP_OWNER
+        val hasPref = prefs?.getBoolean(KEY_IS_SHOP_OWNER_LOGGED_IN, false) == true
+        return hasActiveOwner || hasPref
+    }
+
+    fun restoreShopOwnerSession(): UserEntity? {
+        val owner = activeShopOwner ?: restoreShopOwnerSync()
+        if (owner != null) {
+            activeShopOwner = owner
+            _currentUser.value = owner
+            _currentRole.value = UserRole.SHOP_OWNER
+            prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")?.commit()
+            return owner
+        }
+        return null
+    }
+
+    fun getActiveShopOwner(): UserEntity? {
+        return activeShopOwner ?: restoreShopOwnerSync()
     }
 
     private fun persistCustomerSession(user: UserEntity) {
@@ -137,6 +287,7 @@ class AuthManager(
                 ?.putString(KEY_CUSTOMER_ADDRESS, verifiedUser.deliveryAddress)
                 ?.putString(KEY_CUSTOMER_PHOTO_URI, verifiedUser.profilePhotoUri)
                 ?.putBoolean(KEY_CUSTOMER_VERIFIED, true)
+                ?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")
                 ?.commit()
         }
     }
@@ -333,13 +484,22 @@ class AuthManager(
         _currentRole.value = UserRole.CUSTOMER
         val cust = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
         _currentUser.value = cust
+        prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")?.apply()
     }
 
     fun switchUser(user: UserEntity) {
         _currentUser.value = user
         _currentRole.value = user.role
-        if (user.role == UserRole.CUSTOMER) {
-            persistCustomerSession(user)
+        when (user.role) {
+            UserRole.CUSTOMER -> {
+                persistCustomerSession(user)
+                prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")?.apply()
+            }
+            UserRole.SHOP_OWNER -> {
+                persistShopOwnerSession(user)
+                prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")?.apply()
+            }
+            UserRole.ADMIN -> {}
         }
     }
 
@@ -347,21 +507,49 @@ class AuthManager(
         _currentRole.value = role
         if (_currentUser.value?.role != role) {
             when (role) {
-                UserRole.CUSTOMER -> _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
-                UserRole.SHOP_OWNER -> _currentUser.value = SeedData.shopOwners[0]
+                UserRole.CUSTOMER -> {
+                    _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
+                    prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")?.apply()
+                }
+                UserRole.SHOP_OWNER -> {
+                    val owner = activeShopOwner ?: restoreShopOwnerSync() ?: SeedData.shopOwners[0]
+                    _currentUser.value = owner
+                    prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")?.apply()
+                }
                 UserRole.ADMIN -> _currentUser.value = SeedData.adminUser
             }
         }
     }
 
-    fun logout() {
+    fun logoutShopOwner() {
+        clearShopOwnerSession()
+        _currentRole.value = UserRole.CUSTOMER
+        _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
+    }
+
+    fun logoutCustomer() {
         prefs?.edit()
-            ?.clear()
+            ?.remove(KEY_SAVED_CUSTOMER_ID)
             ?.putBoolean(KEY_IS_LOGGED_IN, false)
+            ?.remove(KEY_CUSTOMER_NAME)
+            ?.remove(KEY_CUSTOMER_PHONE)
+            ?.remove(KEY_CUSTOMER_EMAIL)
+            ?.remove(KEY_CUSTOMER_DISTRICT)
+            ?.remove(KEY_CUSTOMER_BLOCK)
+            ?.remove(KEY_CUSTOMER_GP)
+            ?.remove(KEY_CUSTOMER_VILLAGE)
+            ?.remove(KEY_CUSTOMER_ADDRESS)
+            ?.remove(KEY_CUSTOMER_PHOTO_URI)
+            ?.remove(KEY_CUSTOMER_VERIFIED)
             ?.commit()
         activeCustomer = null
-        _currentUser.value = SeedData.customers[0]
-        _currentRole.value = UserRole.CUSTOMER
+        if (_currentRole.value == UserRole.CUSTOMER) {
+            _currentUser.value = SeedData.customers[0]
+        }
+    }
+
+    fun logout() {
+        logoutCustomer()
     }
 
     fun isCustomerSessionActive(): Boolean {

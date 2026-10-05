@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -67,6 +68,7 @@ fun ShopOwnerDashboardScreen(
     val allNotifications by viewModel.notifications.collectAsState()
 
     var showDpDialog by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
 
     val myShop = shops.find {
         it.ownerId == user?.id ||
@@ -244,6 +246,26 @@ fun ShopOwnerDashboardScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Customer Store", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Button(
+                            onClick = { showLogoutDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp)
+                                .testTag("btn_logout_shop_owner"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFD32F2F),
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Log Out from Shop Dashboard", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 }
@@ -459,6 +481,36 @@ fun ShopOwnerDashboardScreen(
                 onShopPhotoSelected = { shopPhotoUri ->
                     if (myShop != null) {
                         viewModel.updateShopPhoto(myShop.id, shopPhotoUri)
+                    }
+                }
+            )
+        }
+
+        if (showLogoutDialog) {
+            AlertDialog(
+                onDismissRequest = { showLogoutDialog = false },
+                icon = { Icon(Icons.Default.Logout, contentDescription = null, tint = Color(0xFFD32F2F)) },
+                title = { Text("Log Out from Shop Owner Account?", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "Are you sure you want to log out of your shop dashboard (${myShop?.name ?: "Shop"})? Your shop data and orders will remain securely saved. You will return to Customer store view, and can log in again anytime with mobile OTP.",
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showLogoutDialog = false
+                            viewModel.logoutShopOwner()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                    ) {
+                        Text("Log Out")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showLogoutDialog = false }) {
+                        Text("Cancel")
                     }
                 }
             )

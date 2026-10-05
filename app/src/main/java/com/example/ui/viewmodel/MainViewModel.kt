@@ -44,6 +44,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val screenBackStack = ArrayDeque<Screen>()
 
+    private val _currentScreen = MutableStateFlow<Screen>(
+        if (authManager.isShopOwnerSessionActive()) Screen.ShopOwnerDashboard else Screen.CustomerHome
+    )
+    val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
+
     private val _isOrderSyncing = MutableStateFlow(false)
     val isOrderSyncing: StateFlow<Boolean> = _isOrderSyncing.asStateFlow()
 
@@ -70,6 +75,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (_: Throwable) { }
         authManager.restoreSession(viewModelScope)
+        if (authManager.isShopOwnerSessionActive()) {
+            _currentScreen.value = Screen.ShopOwnerDashboard
+        }
         verifyFirebaseConnection()
         syncOrdersFromCloud()
         startPeriodicOrderSync()
@@ -158,9 +166,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _appLanguage = MutableStateFlow<com.example.domain.model.AppLanguage>(com.example.domain.model.AppLanguage.ENGLISH)
     val appLanguage: StateFlow<com.example.domain.model.AppLanguage> = _appLanguage.asStateFlow()
-
-    private val _currentScreen = MutableStateFlow<Screen>(Screen.CustomerHome)
-    val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -330,6 +335,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        if (screen is Screen.ShopOwnerAuth && authManager.isShopOwnerSessionActive()) {
+            authManager.restoreShopOwnerSession()
+            screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
+            _currentScreen.value = Screen.ShopOwnerDashboard
+            return
+        }
+
         val cur = _currentScreen.value
         if (cur is Screen.CustomerAuth && screen is Screen.CustomerHome) {
             screenBackStack.removeAll { it is Screen.CustomerAuth }
@@ -348,19 +360,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         while (screenBackStack.isNotEmpty() && authManager.isCustomerSessionActive() && screenBackStack.last() is Screen.CustomerAuth) {
             screenBackStack.removeLast()
         }
-        // If in Shop Owner role, never pop into customer screens or other shops
-        if (currentRole.value == UserRole.SHOP_OWNER) {
-            while (screenBackStack.isNotEmpty() && (
-                screenBackStack.last() is Screen.CustomerProfile ||
-                screenBackStack.last() is Screen.CustomerAuth ||
-                screenBackStack.last() is Screen.Cart ||
-                screenBackStack.last() is Screen.Checkout ||
-                screenBackStack.last() is Screen.CustomerOrders ||
-                screenBackStack.last() is Screen.OrderTracking ||
-                screenBackStack.last() is Screen.CustomerHome
-            )) {
-                screenBackStack.removeLast()
+        // If in Shop Owner role or has active shop owner session, stay in shop owner screens
+        if (currentRole.value == UserRole.SHOP_OWNER || authManager.isShopOwnerSessionActive()) {
+            screenBackStack.removeAll {
+                it is Screen.CustomerProfile ||
+                it is Screen.CustomerAuth ||
+                it is Screen.ShopOwnerAuth ||
+                it is Screen.Cart ||
+                it is Screen.Checkout ||
+                it is Screen.CustomerOrders ||
+                it is Screen.OrderTracking ||
+                it is Screen.CustomerHome
             }
+            if (screenBackStack.isNotEmpty()) {
+                val previous = screenBackStack.removeLast()
+                _currentScreen.value = previous
+            } else {
+                _currentScreen.value = Screen.ShopOwnerDashboard
+            }
+            return
         }
         if (screenBackStack.isNotEmpty()) {
             val previous = screenBackStack.removeLast()
@@ -368,6 +386,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _currentScreen.value = if (currentRole.value == UserRole.SHOP_OWNER) Screen.ShopOwnerDashboard else Screen.CustomerHome
         }
+    }
+
+    fun logoutShopOwner() {
+        authManager.logoutShopOwner()
+        screenBackStack.clear()
+        _currentScreen.value = Screen.CustomerHome
+        _userMessage.value = "Shop Owner logged out successfully."
     }
 
     fun logoutCustomer() {
@@ -861,7 +886,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ?: SeedData.shopOwners.find { it.phone == _shopOwnerOtpMobile.value }
 
             if (owner != null) {
-                // Existing shop owner: log in directly
+                // Existing shop owner: log in directly and persist session
+                authManager.persistShopOwnerSession(owner)
                 authManager.switchUser(owner)
                 authManager.switchRole(UserRole.SHOP_OWNER)
                 val myShop = allShops.value.find { it.ownerId == owner.id || (owner.shopId != null && it.id == owner.shopId) || (owner.phone.isNotBlank() && it.phone == owner.phone) }
@@ -955,7 +981,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // 4. Switch session to the newly created Shop Owner
+                // 4. Switch session to the newly created Shop Owner and persist session
+                authManager.persistShopOwnerSession(updatedOwner)
                 authManager.switchUser(updatedOwner)
                 authManager.switchRole(UserRole.SHOP_OWNER)
                 resetShopOwnerOtpState()

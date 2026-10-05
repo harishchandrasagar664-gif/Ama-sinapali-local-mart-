@@ -133,6 +133,13 @@ fun ShopOwnerAuthScreen(
         )
     }
 
+    LaunchedEffect(Unit) {
+        if (viewModel.authManager.isShopOwnerSessionActive()) {
+            viewModel.authManager.restoreShopOwnerSession()
+            onSuccess()
+        }
+    }
+
     BackHandler {
         if (otpVerifiedForNewReg) {
             otpVerifiedForNewReg = false

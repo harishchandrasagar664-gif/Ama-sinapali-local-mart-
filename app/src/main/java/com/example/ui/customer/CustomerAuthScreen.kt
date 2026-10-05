@@ -102,6 +102,21 @@ fun CustomerAuthScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
+                actions = {
+                    Button(
+                        onClick = { viewModel.navigateTo(Screen.ShopOwnerAuth) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100), contentColor = Color.White),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .testTag("auth_topbar_btn_shop_owner_login")
+                    ) {
+                        Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Shop Login", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = LocalTealPrimary,
                     titleContentColor = Color.White,
@@ -117,60 +132,17 @@ fun CustomerAuthScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header card
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(54.dp),
-                            shape = CircleShape,
-                            color = Color.White,
-                            shadowElevation = 3.dp
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_mart_icon),
-                                contentDescription = "Ama Sinapali Local Mart",
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Fit
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                "Ama Sinapali Local Mart",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = LocalTealDark
-                            )
-                            Text(
-                                s.loginRegisterWithOtp,
-                                fontSize = 13.sp,
-                                color = LocalTextSecondary
-                            )
-                        }
-                    }
-                }
-            }
-
             // PROMINENT SHOP OWNER PORTAL BANNER (Always visible at the top of the Login Screen)
             item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { viewModel.navigateTo(Screen.ShopOwnerAuth) },
+                        .clickable { viewModel.navigateTo(Screen.ShopOwnerAuth) }
+                        .testTag("auth_card_shop_owner_login_top"),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
-                    border = BorderStroke(1.5.dp, Color(0xFFFF9800)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                    border = BorderStroke(2.dp, Color(0xFFE65100)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -244,17 +216,61 @@ fun CustomerAuthScreen(
                             onClick = { viewModel.navigateTo(Screen.ShopOwnerAuth) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(46.dp)
+                                .height(48.dp)
                                 .testTag("btn_shop_owner_portal_login"),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                         ) {
-                            Icon(Icons.Default.Store, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 "Shop Owner Login with OTP (ଦୋକାନୀ ଲଗଇନ୍)",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Header card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(54.dp),
+                            shape = CircleShape,
+                            color = Color.White,
+                            shadowElevation = 3.dp
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_mart_icon),
+                                contentDescription = "Ama Sinapali Local Mart",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                "Ama Sinapali Local Mart",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = LocalTealDark
+                            )
+                            Text(
+                                s.loginRegisterWithOtp,
+                                fontSize = 13.sp,
+                                color = LocalTextSecondary
                             )
                         }
                     }

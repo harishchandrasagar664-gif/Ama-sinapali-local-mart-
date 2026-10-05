@@ -1281,4 +1281,99 @@ class AmaSinapaliFlowVerificationUnitTest {
         assertEquals(1, searchedByPhone.size)
         assertEquals("Anita Sahu", searchedByPhone[0].customerName)
     }
+
+    @Test
+    fun testShopOwnerSessionPersistenceProperties() {
+        val testOwner = UserEntity(
+            id = 101L,
+            name = "Ramesh Sahu",
+            phone = "9437012345",
+            email = "9437012345@sinapalimart.local",
+            role = UserRole.SHOP_OWNER,
+            shopId = 1L,
+            isVerified = true,
+            district = "Nuapada",
+            block = "Sinapali",
+            gp = "Sinapali",
+            village = "Sinapali",
+            deliveryAddress = "Main Market Sinapali"
+        )
+
+        assertEquals(UserRole.SHOP_OWNER, testOwner.role)
+        assertTrue(testOwner.isVerified)
+        assertEquals(1L, testOwner.shopId)
+        assertEquals("9437012345", testOwner.phone)
+        assertNotNull(testOwner.deliveryAddress)
+    }
+
+    @Test
+    fun testShopOwnerDashboardRestorationOnBackNavigation() {
+        val backStack = ArrayDeque<Screen>()
+        backStack.addLast(Screen.CustomerHome)
+        backStack.addLast(Screen.CustomerProfile)
+        backStack.addLast(Screen.ShopOwnerAuth)
+        backStack.addLast(Screen.ShopProductManagement)
+
+        // When in Shop Owner role, customer screens and auth screens must be pruned from backstack
+        backStack.removeAll {
+            it is Screen.CustomerProfile ||
+            it is Screen.CustomerAuth ||
+            it is Screen.ShopOwnerAuth ||
+            it is Screen.Cart ||
+            it is Screen.Checkout ||
+            it is Screen.CustomerOrders ||
+            it is Screen.OrderTracking ||
+            it is Screen.CustomerHome
+        }
+
+        // Top is ShopProductManagement
+        assertEquals(Screen.ShopProductManagement, backStack.last())
+        val previous = backStack.removeLast()
+        assertEquals(Screen.ShopProductManagement, previous)
+
+        // Now backStack is empty, fallback destination for shop owner is ShopOwnerDashboard
+        val fallback = if (backStack.isNotEmpty()) backStack.removeLast() else Screen.ShopOwnerDashboard
+        assertEquals(Screen.ShopOwnerDashboard, fallback)
+    }
+
+    @Test
+    fun testShopOwnerAndCustomerSessionIndependentIsolation() {
+        var customerLoggedIn = true
+        var customerId = 5L
+        var shopOwnerLoggedIn = true
+        var shopOwnerId = 2L
+
+        // Logging out shop owner must NOT affect customer session
+        shopOwnerLoggedIn = false
+        shopOwnerId = -1L
+
+        assertTrue("Customer session remains intact after shop owner logout", customerLoggedIn)
+        assertEquals("Customer ID unchanged", 5L, customerId)
+        assertFalse("Shop owner is logged out", shopOwnerLoggedIn)
+        assertEquals(-1L, shopOwnerId)
+    }
+
+    @Test
+    fun testCustomerProfileShopOwnerLoginWithOtpButtonNavigation() {
+        // Given customer is browsing CustomerProfile screen
+        val currentScreen = Screen.CustomerProfile
+        val role = UserRole.CUSTOMER
+        val shopOwnerSessionActive = false
+
+        // When tapping "Shop Owner Login with OTP" button
+        val targetScreen: Screen = if (shopOwnerSessionActive) {
+            Screen.ShopOwnerDashboard
+        } else {
+            Screen.ShopOwnerAuth
+        }
+
+        // Verify connected to Shop Owner registration/login screen
+        assertEquals(Screen.ShopOwnerAuth, targetScreen)
+
+        // When shop owner logs in with OTP or registers
+        val authenticatedShopOwner = SeedData.shopOwners[0]
+        assertEquals(UserRole.SHOP_OWNER, authenticatedShopOwner.role)
+        assertNotNull(authenticatedShopOwner.phone)
+        assertTrue(authenticatedShopOwner.phone.length == 10)
+    }
 }

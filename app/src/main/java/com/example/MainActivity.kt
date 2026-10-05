@@ -26,6 +26,7 @@ import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -223,15 +224,27 @@ class MainActivity : ComponentActivity() {
 
                             // Shop Owner Screens: Strictly restricted to UserRole.SHOP_OWNER
                             is Screen.ShopOwnerAuth -> {
-                                ShopOwnerAuthScreen(
-                                    viewModel = viewModel,
-                                    onSuccess = {
+                                if (viewModel.authManager.isShopOwnerSessionActive()) {
+                                    LaunchedEffect(Unit) {
+                                        viewModel.authManager.restoreShopOwnerSession()
                                         viewModel.navigateTo(Screen.ShopOwnerDashboard)
                                     }
-                                )
+                                } else {
+                                    ShopOwnerAuthScreen(
+                                        viewModel = viewModel,
+                                        onSuccess = {
+                                            viewModel.navigateTo(Screen.ShopOwnerDashboard)
+                                        }
+                                    )
+                                }
                             }
                             is Screen.ShopOwnerDashboard, is Screen.ShopOrderManagement -> {
-                                if (currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) {
+                                if ((currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) || viewModel.authManager.isShopOwnerSessionActive()) {
+                                    if (currentRole != UserRole.SHOP_OWNER) {
+                                        LaunchedEffect(Unit) {
+                                            viewModel.authManager.restoreShopOwnerSession()
+                                        }
+                                    }
                                     ShopOwnerDashboardScreen(
                                         viewModel = viewModel,
                                         onRoleSwitchClick = {
@@ -250,7 +263,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             is Screen.ShopProductManagement -> {
-                                if (currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) {
+                                if ((currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) || viewModel.authManager.isShopOwnerSessionActive()) {
+                                    if (currentRole != UserRole.SHOP_OWNER) {
+                                        LaunchedEffect(Unit) {
+                                            viewModel.authManager.restoreShopOwnerSession()
+                                        }
+                                    }
                                     ShopProductManagementScreen(viewModel)
                                 } else {
                                     AccessDeniedScreen(
@@ -263,7 +281,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             is Screen.ShopOffersPromotions -> {
-                                if (currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) {
+                                if ((currentRole == UserRole.SHOP_OWNER && currentUser?.role == UserRole.SHOP_OWNER) || viewModel.authManager.isShopOwnerSessionActive()) {
+                                    if (currentRole != UserRole.SHOP_OWNER) {
+                                        LaunchedEffect(Unit) {
+                                            viewModel.authManager.restoreShopOwnerSession()
+                                        }
+                                    }
                                     ShopOffersPromotionsScreen(viewModel)
                                 } else {
                                     AccessDeniedScreen(
@@ -458,6 +481,18 @@ class MainActivity : ComponentActivity() {
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text("Switch to Customer Store View")
                                             }
+                                            Button(
+                                                onClick = {
+                                                    viewModel.logoutShopOwner()
+                                                    showPortalSwitcher = false
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                                            ) {
+                                                Icon(Icons.Default.Logout, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Log Out from Shop Dashboard")
+                                            }
                                         } else {
                                             // CUSTOMER MODE
                                             Text(
@@ -492,12 +527,55 @@ class MainActivity : ComponentActivity() {
                                                 val isOtpSent by viewModel.isShopOwnerOtpSent.collectAsState()
                                                 val otpCode by viewModel.shopOwnerOtpCode.collectAsState()
                                                 var inlineOtp by remember { mutableStateOf("") }
+                                                val isShopOwnerSessionActive = viewModel.authManager.isShopOwnerSessionActive()
 
                                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                    Text(
-                                                        "Enter registered Shop Owner mobile number (e.g. Ramesh Sahu 9437012345, Santosh Meher 9437054321):",
-                                                        fontSize = 11.sp
-                                                    )
+                                                    if (isShopOwnerSessionActive) {
+                                                        val savedOwner = viewModel.authManager.getActiveShopOwner()
+                                                        val mySavedShop = allShops.find { it.ownerId == savedOwner?.id || (savedOwner?.shopId != null && it.id == savedOwner.shopId) || (savedOwner?.phone?.isNotBlank() == true && it.phone == savedOwner.phone) }
+                                                        Surface(
+                                                            color = Color(0xFFFFF3E0),
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            border = BorderStroke(1.dp, Color(0xFFFF9800)),
+                                                            modifier = Modifier.fillMaxWidth()
+                                                        ) {
+                                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                                Text("Active Authenticated Shop Owner Session:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFBF360C))
+                                                                Text("${savedOwner?.name ?: "Shop Owner"} • ${mySavedShop?.name ?: "My Shop"}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                                                Text("Mobile: ${savedOwner?.phone ?: ""}", fontSize = 11.sp, color = Color.DarkGray)
+                                                                Button(
+                                                                    onClick = {
+                                                                        viewModel.authManager.restoreShopOwnerSession()
+                                                                        viewModel.navigateTo(Screen.ShopOwnerDashboard)
+                                                                        showPortalSwitcher = false
+                                                                    },
+                                                                    modifier = Modifier.fillMaxWidth(),
+                                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                                                ) {
+                                                                    Icon(Icons.Default.Storefront, contentDescription = null)
+                                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                                    Text("Open My Shop Dashboard (No OTP)")
+                                                                }
+                                                                OutlinedButton(
+                                                                    onClick = {
+                                                                        viewModel.logoutShopOwner()
+                                                                    },
+                                                                    modifier = Modifier.fillMaxWidth()
+                                                                ) {
+                                                                    Icon(Icons.Default.Logout, contentDescription = null)
+                                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                                    Text("Log Out this Shop Account", fontSize = 11.sp)
+                                                                }
+                                                            }
+                                                        }
+                                                        HorizontalDivider()
+                                                        Text("Or verify another Shop Owner mobile number with OTP:", fontSize = 11.sp)
+                                                    } else {
+                                                        Text(
+                                                            "Enter registered Shop Owner mobile number (e.g. Ramesh Sahu 9437012345, Santosh Meher 9437054321):",
+                                                            fontSize = 11.sp
+                                                        )
+                                                    }
                                                     OutlinedTextField(
                                                         value = shopPhoneInput,
                                                         onValueChange = {
