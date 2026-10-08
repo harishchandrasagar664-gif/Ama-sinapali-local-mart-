@@ -69,6 +69,8 @@ fun ShopOwnerDashboardScreen(
 
     var showDpDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showDeleteShopDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     val myShop = shops.find {
         it.ownerId == user?.id ||
@@ -266,6 +268,46 @@ fun ShopOwnerDashboardScreen(
                             Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Log Out from Shop Dashboard", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Play Store Compliant Shop Account Deletion Option
+                        OutlinedButton(
+                            onClick = { showDeleteShopDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("btn_delete_shop_owner_account"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color(0xFFD32F2F)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD32F2F).copy(alpha = 0.6f)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFFD32F2F))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Delete Shop Account & Wipe Cloud Data", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFD32F2F))
+                        }
+
+                        TextButton(
+                            onClick = {
+                                try {
+                                    val intent = android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html")
+                                    )
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    viewModel.navigateTo(Screen.PrivacyPolicy)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(14.dp), tint = LocalTextSecondary)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("External Web Account-Deletion Page", fontSize = 11.sp, color = LocalTextSecondary)
                         }
                     }
                 }
@@ -515,6 +557,44 @@ fun ShopOwnerDashboardScreen(
                 }
             )
         }
+
+        if (showDeleteShopDialog) {
+            AlertDialog(
+                onDismissRequest = { showDeleteShopDialog = false },
+                icon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color(0xFFD32F2F)) },
+                title = { Text("Permanently Delete Shop & Wipe Data?", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "This action is permanent under Google Play User Data policies. Deleting this account will permanently remove your shop (${myShop?.name ?: "Shop"}), its catalog products, promotional banners, reviews, and cloud records from Firebase backend.",
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            "Shop ID: ${myShop?.id ?: "N/A"} • Owner: ${user?.name ?: "Shop Owner"}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LocalTextSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showDeleteShopDialog = false
+                            viewModel.deleteShopOwnerAccount()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                    ) {
+                        Text("Permanently Delete", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteShopDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -723,7 +803,26 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             }
                         }
 
-                        Text("Product Image (Permanent App Storage)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Product Image (Universal Cloud Sync across Mobiles)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        OutlinedTextField(
+                            value = savedImagePath ?: "",
+                            onValueChange = {
+                                savedImagePath = it
+                                imageSourceDescription = if (it.isNotBlank()) "Custom Image URL" else null
+                            },
+                            label = { Text("Product Image URL or Link") },
+                            placeholder = { Text("https://... or paste image link") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            trailingIcon = {
+                                if (!savedImagePath.isNullOrBlank()) {
+                                    IconButton(onClick = { savedImagePath = null; imageSourceDescription = null }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear Image URL")
+                                    }
+                                }
+                            }
+                        )
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -771,7 +870,7 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(imageSourceDescription ?: "Image ready (saved in app storage)", fontSize = 11.sp, color = LocalSuccess)
+                                Text(imageSourceDescription ?: "Universal cloud image ready (synced to Firebase ☁️)", fontSize = 11.sp, color = LocalSuccess)
                             }
                         }
                     }
@@ -779,11 +878,12 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                 confirmButton = {
                     Button(onClick = {
                         val price = prodPrice.toDoubleOrNull() ?: 100.0
-                        val finalImageUrl = savedImagePath
+                        val rawImageUrl = savedImagePath
                             ?: selectedImageUri?.let { ImageStorageHelper.copyProductUri(context, it) }
                             ?: capturedBitmap?.let { ImageStorageHelper.saveProductBitmap(context, it) }
                             ?: editingProduct?.imageUrl
                             ?: "hero_local_mart"
+                        val finalImageUrl = ImageStorageHelper.toUniversalImageUrl(context, rawImageUrl)
 
                         if (editingProduct != null) {
                             val updated = editingProduct!!.copy(

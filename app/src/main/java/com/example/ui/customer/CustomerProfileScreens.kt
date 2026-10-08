@@ -2,14 +2,21 @@
 
 package com.example.ui.customer
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.UserRole
 import com.example.ui.components.ProfilePhotoUploadDialog
@@ -139,6 +147,8 @@ fun CustomerProfileScreen(
     var showEditAddressDialog by remember { mutableStateOf(false) }
     var showDpDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val isSessionActive = viewModel.authManager.isCustomerSessionActive() || (user?.isVerified == true && user?.id != null)
 
     var editDistrict by remember(user) { mutableStateOf(user?.district ?: "Nuapada") }
@@ -218,6 +228,59 @@ fun CustomerProfileScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Official App Logo & Brand Header Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.White,
+                            shadowElevation = 3.dp,
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
+                                contentDescription = "Sinapali Local Mart Official Logo",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Ama Sinapali Local Mart",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = LocalTealDark
+                            )
+                            Text(
+                                "ଆମ ଗାଁ, ଆମର ଦୋକାନ",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFE65100)
+                            )
+                            Text(
+                                "Town Fast Delivery • Vocal for Local",
+                                fontSize = 11.sp,
+                                color = LocalTextSecondary
+                            )
+                        }
+                    }
+                }
+            }
+
             // PROMINENT SHOP OWNER LOGIN WITH OTP CARD (Very First Item on Customer Profile Screen)
             item {
                 Card(
@@ -528,6 +591,21 @@ fun CustomerProfileScreen(
                             Text(s.logoutBtn, fontWeight = FontWeight.Bold)
                         }
 
+                        // Play Store Compliant Permanent Account Deletion Option
+                        OutlinedButton(
+                            onClick = { showDeleteAccountDialog = true },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_delete_account_customer"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(s.deleteAccountBtn, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                        }
+
                         // Option to switch account
                         OutlinedButton(
                             onClick = { viewModel.navigateTo(Screen.CustomerAuth) },
@@ -653,6 +731,21 @@ fun CustomerProfileScreen(
                             subtitle = "Store rules, user agreement & COD guidelines",
                             onClick = { viewModel.navigateTo(Screen.TermsConditions) }
                         )
+                        HorizontalDivider()
+
+                        ProfileNavRow(
+                            icon = Icons.Default.OpenInBrowser,
+                            title = s.webDeletionRequestOption,
+                            subtitle = "Online request form to wipe account & personal data",
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html"))
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    viewModel.navigateTo(Screen.PrivacyPolicy)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -759,6 +852,41 @@ fun CustomerProfileScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showLogoutDialog = false }) {
+                        Text(s.cancelBtn)
+                    }
+                }
+            )
+        }
+
+        if (showDeleteAccountDialog) {
+            AlertDialog(
+                onDismissRequest = { showDeleteAccountDialog = false },
+                icon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                title = { Text(s.deleteAccountConfirmTitle, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(s.deleteAccountConfirmMessage, fontSize = 13.sp)
+                        Text(
+                            "Account ID: ${user?.id ?: viewModel.authManager.getPersistedCustomerId()} • Mobile: ${user?.phone.takeIf { !it.isNullOrBlank() } ?: "Saved Customer"}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LocalTextSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showDeleteAccountDialog = false
+                            viewModel.deleteCustomerAccount()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Permanently Delete", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteAccountDialog = false }) {
                         Text(s.cancelBtn)
                     }
                 }

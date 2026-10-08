@@ -38,6 +38,33 @@ interface MartDao {
     @Update
     suspend fun updateUser(user: UserEntity)
 
+    @Delete
+    suspend fun deleteUser(user: UserEntity)
+
+    @Query("DELETE FROM users WHERE id = :id")
+    suspend fun deleteUserById(id: Long)
+
+    @Query("DELETE FROM addresses WHERE userId = :userId")
+    suspend fun deleteAddressesForUser(userId: Long)
+
+    @Query("DELETE FROM notifications WHERE userId = :userId")
+    suspend fun deleteNotificationsForUser(userId: Long)
+
+    @Delete
+    suspend fun deleteShop(shop: ShopEntity)
+
+    @Query("DELETE FROM shops WHERE id = :shopId")
+    suspend fun deleteShopById(shopId: Long)
+
+    @Query("DELETE FROM products WHERE shopId = :shopId")
+    suspend fun deleteProductsForShop(shopId: Long)
+
+    @Query("DELETE FROM promotions WHERE shopId = :shopId")
+    suspend fun deletePromotionsForShop(shopId: Long)
+
+    @Query("DELETE FROM reviews WHERE shopId = :shopId")
+    suspend fun deleteReviewsForShop(shopId: Long)
+
     // Shops
     @Query("SELECT * FROM shops WHERE isApproved = 1")
     fun getActiveShops(): Flow<List<ShopEntity>>

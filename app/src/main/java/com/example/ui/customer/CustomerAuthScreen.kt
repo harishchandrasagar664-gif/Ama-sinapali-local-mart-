@@ -245,14 +245,14 @@ fun CustomerAuthScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Surface(
-                            modifier = Modifier.size(54.dp),
+                            modifier = Modifier.size(58.dp),
                             shape = CircleShape,
                             color = Color.White,
-                            shadowElevation = 3.dp
+                            shadowElevation = 4.dp
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.ic_mart_icon),
-                                contentDescription = "Ama Sinapali Local Mart",
+                                painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
+                                contentDescription = "Ama Sinapali Local Mart Official Logo",
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clip(CircleShape),
@@ -264,12 +264,18 @@ fun CustomerAuthScreen(
                             Text(
                                 "Ama Sinapali Local Mart",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
+                                fontSize = 17.sp,
                                 color = LocalTealDark
                             )
                             Text(
+                                "ଆମ ଗାଁ, ଆମର ଦୋକାନ",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFE65100)
+                            )
+                            Text(
                                 s.loginRegisterWithOtp,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 color = LocalTextSecondary
                             )
                         }

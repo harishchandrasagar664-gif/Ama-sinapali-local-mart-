@@ -20,6 +20,7 @@ class MartRepository(private val dao: MartDao) {
         CoroutineScope(Dispatchers.IO).launch {
             seedDatabaseIfEmpty()
             syncOrdersFromCloud()
+            syncShopsAndProductsFromCloud()
         }
     }
 
@@ -63,14 +64,69 @@ class MartRepository(private val dao: MartDao) {
     suspend fun insertUser(user: UserEntity): Long = dao.insertUser(user)
     suspend fun updateUser(user: UserEntity) = dao.updateUser(user)
 
+    /**
+     * Permanently deletes customer account, personal addresses, cart, and wipes cloud records.
+     * Complies with Google Play Store User Data Deletion Policy and GDPR.
+     */
+    suspend fun deleteCustomerAccountAndData(userId: Long) = withContext(Dispatchers.IO) {
+        dao.clearCart(userId)
+        dao.deleteAddressesForUser(userId)
+        dao.deleteNotificationsForUser(userId)
+        dao.deleteUserById(userId)
+        try {
+            FirestoreSyncService.deleteUserFromFirestore(userId)
+        } catch (_: Throwable) { }
+    }
+
+    /**
+     * Permanently deletes shop owner account, shop entity, shop products, promotions, reviews and cloud records.
+     */
+    suspend fun deleteShopOwnerAccountAndData(userId: Long, shopId: Long?) = withContext(Dispatchers.IO) {
+        dao.clearCart(userId)
+        dao.deleteAddressesForUser(userId)
+        dao.deleteNotificationsForUser(userId)
+        if (shopId != null && shopId > 0L) {
+            dao.deleteProductsForShop(shopId)
+            dao.deletePromotionsForShop(shopId)
+            dao.deleteReviewsForShop(shopId)
+            dao.deleteShopById(shopId)
+            try {
+                FirestoreSyncService.deleteShopFromFirestore(shopId)
+            } catch (_: Throwable) { }
+        }
+        dao.deleteUserById(userId)
+        try {
+            FirestoreSyncService.deleteUserFromFirestore(userId)
+        } catch (_: Throwable) { }
+    }
+
     fun getActiveShops(): Flow<List<ShopEntity>> = dao.getActiveShops()
     fun getAllShops(): Flow<List<ShopEntity>> = dao.getAllShops()
     fun getShopById(shopId: Long): Flow<ShopEntity?> = dao.getShopById(shopId)
     suspend fun getShopByIdSync(shopId: Long): ShopEntity? = dao.getShopByIdSync(shopId)
     suspend fun getShopByOwnerId(ownerId: Long): ShopEntity? = dao.getShopByOwnerId(ownerId)
     fun getShopFlowByOwnerId(ownerId: Long): Flow<ShopEntity?> = dao.getShopFlowByOwnerId(ownerId)
-    suspend fun createShop(shop: ShopEntity): Long = dao.insertShop(shop)
-    suspend fun updateShop(shop: ShopEntity) = dao.updateShop(shop)
+    suspend fun createShop(shop: ShopEntity): Long = withContext(Dispatchers.IO) {
+        val assignedId = if (shop.id > 0L) shop.id else (System.currentTimeMillis() % 100000000L + 1000L)
+        val toInsert = shop.copy(id = assignedId)
+        val id = dao.insertShop(toInsert)
+        val finalId = if (id > 0L) id else assignedId
+        val persisted = toInsert.copy(id = finalId)
+        try {
+            FirestoreSyncService.pushShopToFirestore(persisted)
+        } catch (_: Throwable) { }
+        finalId
+    }
+    suspend fun updateShop(shop: ShopEntity) = withContext(Dispatchers.IO) {
+        dao.updateShop(shop)
+        try {
+            FirestoreSyncService.pushShopToFirestore(shop)
+        } catch (_: Throwable) { }
+    }
+
+    suspend fun insertOrUpdateShopFromCloud(shop: ShopEntity) = withContext(Dispatchers.IO) {
+        dao.insertShop(shop)
+    }
 
     fun getActiveProducts(): Flow<List<ProductEntity>> = dao.getActiveProducts()
     fun getAllProducts(): Flow<List<ProductEntity>> = dao.getAllProducts()
@@ -78,9 +134,40 @@ class MartRepository(private val dao: MartDao) {
     fun getProductsByCategory(category: String): Flow<List<ProductEntity>> = dao.getProductsByCategory(category)
     fun getProductById(productId: Long): Flow<ProductEntity?> = dao.getProductById(productId)
     suspend fun getProductByIdSync(productId: Long): ProductEntity? = dao.getProductByIdSync(productId)
-    suspend fun addProduct(product: ProductEntity): Long = dao.insertProduct(product)
-    suspend fun updateProduct(product: ProductEntity) = dao.updateProduct(product)
-    suspend fun deleteProduct(product: ProductEntity) = dao.deleteProduct(product)
+
+    suspend fun addProduct(product: ProductEntity): Long = withContext(Dispatchers.IO) {
+        val assignedId = if (product.id > 0L) product.id else (System.currentTimeMillis() % 100000000L + 10000L)
+        val toInsert = product.copy(id = assignedId)
+        val id = dao.insertProduct(toInsert)
+        val finalId = if (id > 0L) id else assignedId
+        val persisted = toInsert.copy(id = finalId)
+        try {
+            FirestoreSyncService.pushProductToFirestore(persisted)
+        } catch (_: Throwable) { }
+        finalId
+    }
+
+    suspend fun updateProduct(product: ProductEntity) = withContext(Dispatchers.IO) {
+        dao.updateProduct(product)
+        try {
+            FirestoreSyncService.pushProductToFirestore(product)
+        } catch (_: Throwable) { }
+    }
+
+    suspend fun deleteProduct(product: ProductEntity) = withContext(Dispatchers.IO) {
+        dao.deleteProduct(product)
+        try {
+            FirestoreSyncService.deleteProductFromFirestore(product)
+        } catch (_: Throwable) { }
+    }
+
+    suspend fun insertOrUpdateProductFromCloud(product: ProductEntity) = withContext(Dispatchers.IO) {
+        dao.insertProduct(product)
+    }
+
+    suspend fun deleteProductLocally(product: ProductEntity) = withContext(Dispatchers.IO) {
+        dao.deleteProduct(product)
+    }
 
     fun getAllCategories(): Flow<List<CategoryEntity>> = dao.getAllCategories()
 
@@ -168,7 +255,7 @@ class MartRepository(private val dao: MartDao) {
 
         // Guaranteed immediate push to Firebase Firestore so Admin sees it immediately from any device
         try {
-            FirestoreSyncService.pushOrderToFirestore(order.copy(id = orderId), orderItems)
+            FirestoreSyncService.pushOrderToFirestore(order.copy(id = orderId), orderItems, shop.name)
         } catch (e: Throwable) {
             android.util.Log.w("MartRepository", "Notice: Firestore immediate push: ${e.message}")
         }
@@ -305,8 +392,8 @@ class MartRepository(private val dao: MartDao) {
     suspend fun insertOrderFromCloud(order: OrderEntity, items: List<OrderItemEntity>): Long = withContext(Dispatchers.IO) {
         val existing = dao.getOrderByOrderNumber(order.orderNumber)
         if (existing != null) {
-            if (existing.status != order.status) {
-                dao.updateOrderStatus(existing.id, order.status)
+            if (existing.status != order.status || existing.paymentStatus != order.paymentStatus || existing.finalAmount != order.finalAmount) {
+                dao.updateOrder(order.copy(id = existing.id))
             }
             val existingItems = dao.getOrderItems(existing.id).first()
             if (existingItems.isEmpty() && items.isNotEmpty()) {
@@ -471,5 +558,19 @@ class MartRepository(private val dao: MartDao) {
             android.util.Log.w("MartRepository", "Notice: syncOrdersFromCloud error: ${e.message}")
         }
         syncedCount
+    }
+
+    /**
+     * Bidirectional sync: Pulls all active shops and their products from Firebase Firestore
+     * and merges them into the local Room database, and backfills local shops/products to Firestore.
+     */
+    suspend fun syncShopsAndProductsFromCloud(): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        var res = Pair(0, 0)
+        try {
+            res = FirestoreSyncService.performShopAndProductCloudSync(dao)
+        } catch (e: Throwable) {
+            android.util.Log.w("MartRepository", "Notice: syncShopsAndProductsFromCloud error: ${e.message}")
+        }
+        res
     }
 }

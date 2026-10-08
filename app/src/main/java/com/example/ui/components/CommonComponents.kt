@@ -66,10 +66,10 @@ fun OdiaGreetingHeader(
                     shape = CircleShape,
                     color = Color.White,
                     shadowElevation = 3.dp,
-                    modifier = Modifier.size(46.dp)
+                    modifier = Modifier.size(50.dp)
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.ic_mart_icon),
+                        painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
                         contentDescription = s.appName,
                         modifier = Modifier
                             .fillMaxSize()

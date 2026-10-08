@@ -16,8 +16,8 @@ android {
         applicationId = "com.aistudio.amalocalmart.oxrkpz"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 5
+        versionName = "1.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "RAZORPAY_KEY_ID", "\"rzp_test_placeholder\"")

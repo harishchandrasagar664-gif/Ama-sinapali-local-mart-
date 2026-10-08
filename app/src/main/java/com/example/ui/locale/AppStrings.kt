@@ -133,6 +133,11 @@ data class AppStrings(
     val logoutConfirmTitle: String,
     val logoutConfirmMessage: String,
     val activeCustomerSessionBadge: String,
+    val deleteAccountBtn: String,
+    val deleteAccountConfirmTitle: String,
+    val deleteAccountConfirmMessage: String,
+    val deleteAccountSuccessMessage: String,
+    val webDeletionRequestOption: String,
 
     // Auth Screen
     val accountTitle: String,
@@ -398,6 +403,11 @@ data class AppStrings(
             logoutConfirmTitle = "Log Out from Customer Account?",
             logoutConfirmMessage = "Are you sure you want to log out? Your active session will be cleared until you log in with OTP again.",
             activeCustomerSessionBadge = "Active Customer Session",
+            deleteAccountBtn = "Delete Account & Wipe Data",
+            deleteAccountConfirmTitle = "Permanently Delete Account & Personal Data?",
+            deleteAccountConfirmMessage = "This action is permanent and irreversible under Play Store user data policy. Your profile, delivery addresses, cart, profile picture, and customer records will be permanently erased from our device storage and Firebase cloud backend. Past completed order records are anonymized for tax & legal compliance.",
+            deleteAccountSuccessMessage = "Your account and personal data have been permanently deleted.",
+            webDeletionRequestOption = "External Web Account-Deletion Request Page",
 
             accountTitle = "Customer Account",
             accountSubtitle = "Verified Customer Login & Registration",
@@ -542,6 +552,11 @@ data class AppStrings(
             logoutConfirmTitle = "ଗ୍ରାହକ ଆକାଉଣ୍ଟରୁ ଲଗ୍ ଆଉଟ୍ କରିବେ କି?",
             logoutConfirmMessage = "ଆପଣ ନିଶ୍ଚିତ ଭାବେ ଲଗ୍ ଆଉଟ୍ କରିବାକୁ ଚାହାଁନ୍ତି କି? ପୁନର୍ବାର OTP ଦେଇ ଲଗଇନ୍ ନକରିବା ପର୍ଯ୍ୟନ୍ତ ଏହା ଲଗ୍ ଆଉଟ୍ ରହିବ।",
             activeCustomerSessionBadge = "ସକ୍ରିୟ ଗ୍ରାହକ ସେସନ୍",
+            deleteAccountBtn = "ଖାତା ସମ୍ପୂର୍ଣ୍ଣ ବିଲୋପ କରନ୍ତୁ (Delete Account)",
+            deleteAccountConfirmTitle = "ଆପଣଙ୍କ ଖାତା ଏବଂ ବ୍ୟକ୍ତିଗତ ତଥ୍ୟ ସବୁଦିନ ପାଇଁ ଲିଭାଇବେ କି?",
+            deleteAccountConfirmMessage = "ଏହି କାର୍ଯ୍ୟ ଅପରିବର୍ତ୍ତନୀୟ। ଆପଣଙ୍କ ପ୍ରୋଫାଇଲ୍, ଠିକଣା, ବାସ୍କେଟ୍, ଫଟୋ ଏବଂ ସମସ୍ତ ବ୍ୟକ୍ତିଗତ ତଥ୍ୟ ଆମ ଡିଭାଇସ୍ ଏବଂ Firebase କ୍ଲାଉଡ୍ ବ୍ୟାକଏଣ୍ଡରୁ ସବୁଦିନ ପାଇଁ ବିଲୋପ (Permanent Delete) ହୋଇଯିବ।",
+            deleteAccountSuccessMessage = "ଆପଣଙ୍କ ଖାତା ଏବଂ ବ୍ୟକ୍ତିଗତ ତଥ୍ୟ ସଫଳତାର ସହ ବିଲୋପ ହୋଇଛି।",
+            webDeletionRequestOption = "ୱେବ୍ ଆକାଉଣ୍ଟ-ବିଲୋପ ଅନୁରୋଧ ଫର୍ମ",
 
             accountTitle = "ଗ୍ରାହକ ଖାତା",
             accountSubtitle = "ଯାଞ୍ଚ ହୋଇଥିବା ଗ୍ରାହକ ଲଗଇନ୍ ଓ ପଞ୍ଜୀକରଣ",

@@ -66,11 +66,11 @@ fun SplashScreen(onTimeout: () -> Unit) {
                 shape = CircleShape,
                 color = Color.White,
                 shadowElevation = 8.dp,
-                modifier = Modifier.size(130.dp)
+                modifier = Modifier.size(140.dp)
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.ic_mart_icon),
-                    contentDescription = "Ama Sinapali Local Mart Logo",
+                    painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
+                    contentDescription = "Ama Sinapali Local Mart Official Logo",
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(CircleShape),

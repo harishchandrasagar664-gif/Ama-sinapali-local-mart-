@@ -50,6 +50,20 @@ object FirebaseSyncConfig {
             "$FIRESTORE_BASE_URL/$COLLECTION_ORDERS"
         }
 
+    val FIRESTORE_SHOPS_URL: String
+        get() = if (FIREBASE_PROJECT_ID == DEFAULT_FIREBASE_PROJECT_ID) {
+            "$FIRESTORE_BASE_URL/$COLLECTION_SHOPS?key=$FIREBASE_API_KEY"
+        } else {
+            "$FIRESTORE_BASE_URL/$COLLECTION_SHOPS"
+        }
+
+    val FIRESTORE_PRODUCTS_URL: String
+        get() = if (FIREBASE_PROJECT_ID == DEFAULT_FIREBASE_PROJECT_ID) {
+            "$FIRESTORE_BASE_URL/$COLLECTION_PRODUCTS?key=$FIREBASE_API_KEY"
+        } else {
+            "$FIRESTORE_BASE_URL/$COLLECTION_PRODUCTS"
+        }
+
     /**
      * Firebase Realtime Database Base URL for instant real-time listener fallback.
      */

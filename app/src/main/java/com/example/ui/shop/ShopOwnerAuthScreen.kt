@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,13 +32,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.local.SeedData
 import com.example.ui.components.ProductImage
 import com.example.ui.theme.*
@@ -212,17 +216,18 @@ fun ShopOwnerAuthScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
                                 shape = CircleShape,
-                                color = Color(0xFFE65100),
-                                modifier = Modifier.size(44.dp)
+                                color = Color.White,
+                                shadowElevation = 4.dp,
+                                modifier = Modifier.size(52.dp)
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.Storefront,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
+                                Image(
+                                    painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
+                                    contentDescription = "Sinapali Local Mart Official Logo",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape),
+                                    contentScale = ContentScale.Fit
+                                )
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
@@ -231,6 +236,12 @@ fun ShopOwnerAuthScreen(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 18.sp,
                                     color = Color(0xFFBF360C)
+                                )
+                                Text(
+                                    "Ama Sinapali Local Mart • ଆମ ଗାଁ, ଆମର ଦୋକାନ",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFE65100)
                                 )
                                 Text(
                                     "Exclusive portal for verified local shop owners",
@@ -436,60 +447,77 @@ fun ShopOwnerAuthScreen(
                                     border = BorderStroke(1.dp, Color(0xFFFFCC80)),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        ProductImage(
-                                            imageUrl = regImageUrl,
-                                            modifier = Modifier
-                                                .size(72.dp)
-                                                .clip(RoundedCornerShape(10.dp)),
-                                            fallbackIcon = Icons.Default.Storefront
-                                        )
-
-                                        Spacer(modifier = Modifier.width(12.dp))
-
-                                        Column(
-                                            modifier = Modifier.weight(1f),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(
-                                                "Upload Shop Photo",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                color = Color(0xFFBF360C)
+                                            ProductImage(
+                                                imageUrl = regImageUrl,
+                                                modifier = Modifier
+                                                    .size(72.dp)
+                                                    .clip(RoundedCornerShape(10.dp)),
+                                                fallbackIcon = Icons.Default.Storefront
                                             )
-                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                                    modifier = Modifier.height(34.dp)
-                                                ) {
-                                                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFE65100))
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text("Camera", fontSize = 11.sp, color = Color(0xFFE65100))
-                                                }
 
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        galleryLauncher.launch(
-                                                            PickVisualMediaRequest(
-                                                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                                            Spacer(modifier = Modifier.width(12.dp))
+
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    "Upload Shop Photo (Cloud Synced)",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = Color(0xFFBF360C)
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                                        modifier = Modifier.height(34.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFE65100))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Camera", fontSize = 11.sp, color = Color(0xFFE65100))
+                                                    }
+
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            galleryLauncher.launch(
+                                                                PickVisualMediaRequest(
+                                                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                                                )
                                                             )
-                                                        )
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                                    modifier = Modifier.height(34.dp)
-                                                ) {
-                                                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFE65100))
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text("Gallery", fontSize = 11.sp, color = Color(0xFFE65100))
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                                        modifier = Modifier.height(34.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFE65100))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Gallery", fontSize = 11.sp, color = Color(0xFFE65100))
+                                                    }
                                                 }
                                             }
                                         }
+
+                                        OutlinedTextField(
+                                            value = if (regImageUrl.startsWith("data:")) "Photo attached (ready for cloud)" else regImageUrl,
+                                            onValueChange = { regImageUrl = it },
+                                            label = { Text("Shop Image URL or Link") },
+                                            placeholder = { Text("https://... or select preset") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            trailingIcon = {
+                                                if (regImageUrl.isNotBlank()) {
+                                                    IconButton(onClick = { regImageUrl = "hero_local_mart" }) {
+                                                        Icon(Icons.Default.Clear, contentDescription = "Reset Image")
+                                                    }
+                                                }
+                                            }
+                                        )
                                     }
                                 }
 

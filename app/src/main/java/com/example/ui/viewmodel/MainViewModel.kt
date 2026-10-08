@@ -80,8 +80,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         verifyFirebaseConnection()
         syncOrdersFromCloud()
+        syncShopsAndProductsFromCloud()
         startPeriodicOrderSync()
         startRealtimeFirebaseOrdersListener()
+        startRealtimeFirebaseShopsListener()
+        startRealtimeFirebaseProductsListener()
     }
 
     private fun startRealtimeFirebaseOrdersListener() {
@@ -95,11 +98,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     if (snapshot != null) {
                         viewModelScope.launch(Dispatchers.IO) {
-                            for (doc in snapshot.documents) {
-                                val parsed = FirestoreSyncService.firestoreDocToOrder(doc)
-                                if (parsed != null) {
-                                    val (remoteOrder, remoteItems) = parsed
-                                    repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                            if (snapshot.documentChanges.isNotEmpty()) {
+                                for (change in snapshot.documentChanges) {
+                                    val parsed = FirestoreSyncService.firestoreDocToOrder(change.document)
+                                    if (parsed != null) {
+                                        val (remoteOrder, remoteItems) = parsed
+                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                                    }
+                                }
+                            } else {
+                                for (doc in snapshot.documents) {
+                                    val parsed = FirestoreSyncService.firestoreDocToOrder(doc)
+                                    if (parsed != null) {
+                                        val (remoteOrder, remoteItems) = parsed
+                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                                    }
                                 }
                             }
                         }
@@ -107,6 +120,86 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
         } catch (e: Throwable) {
             android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase listener: ${e.message}")
+        }
+    }
+
+    private fun startRealtimeFirebaseShopsListener() {
+        try {
+            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        android.util.Log.w("MainViewModel", "Realtime Firebase shops listener notice: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            for (doc in snapshot.documents) {
+                                val parsed = FirestoreSyncService.firestoreDocToShop(doc)
+                                if (parsed != null) {
+                                    repository.insertOrUpdateShopFromCloud(parsed)
+                                }
+                            }
+                        }
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase shops listener: ${e.message}")
+        }
+    }
+
+    private fun startRealtimeFirebaseProductsListener() {
+        try {
+            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        android.util.Log.w("MainViewModel", "Realtime Firebase products listener notice: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            if (snapshot.documentChanges.isNotEmpty()) {
+                                for (change in snapshot.documentChanges) {
+                                    when (change.type) {
+                                        com.google.firebase.firestore.DocumentChange.Type.ADDED,
+                                        com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
+                                            val parsed = FirestoreSyncService.firestoreDocToProduct(change.document)
+                                            if (parsed != null) {
+                                                repository.insertOrUpdateProductFromCloud(parsed)
+                                            }
+                                        }
+                                        com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
+                                            val parsed = FirestoreSyncService.firestoreDocToProduct(change.document)
+                                            if (parsed != null) {
+                                                repository.deleteProductLocally(parsed)
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (doc in snapshot.documents) {
+                                    val parsed = FirestoreSyncService.firestoreDocToProduct(doc)
+                                    if (parsed != null) {
+                                        repository.insertOrUpdateProductFromCloud(parsed)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase products listener: ${e.message}")
+        }
+    }
+
+    fun syncShopsAndProductsFromCloud() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.syncShopsAndProductsFromCloud()
+            } catch (e: Throwable) {
+                android.util.Log.w("MainViewModel", "Notice: syncShopsAndProductsFromCloud: ${e.message}")
+            }
         }
     }
 
@@ -156,6 +249,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.delay(5000)
                 try {
                     repository.syncOrdersFromCloud()
+                    repository.syncShopsAndProductsFromCloud()
                     _lastOrderSyncTime.value = System.currentTimeMillis()
                 } catch (e: Throwable) {
                     // Ignore background sync errors
@@ -402,6 +496,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _userMessage.value = "Logged out successfully."
     }
 
+    /**
+     * Permanently deletes customer account, local records, cart, addresses,
+     * and wipes data from Firebase backend. Complies with Google Play Data Deletion Policy.
+     */
+    fun deleteCustomerAccount() {
+        val user = currentUser.value
+        val userId = user?.id ?: authManager.getPersistedCustomerId()
+        viewModelScope.launch {
+            if (userId > 0L) {
+                repository.deleteCustomerAccountAndData(userId)
+            }
+            authManager.logout()
+            screenBackStack.clear()
+            _currentScreen.value = Screen.CustomerHome
+            _userMessage.value = "Your account and associated personal data have been permanently deleted from Ama Sinapali & Firebase."
+        }
+    }
+
+    /**
+     * Permanently deletes shop owner account, shop records, products,
+     * promotions and wipes data from Firebase backend.
+     */
+    fun deleteShopOwnerAccount() {
+        val user = currentUser.value
+        val userId = user?.id ?: 0L
+        val shopId = user?.shopId
+        viewModelScope.launch {
+            if (userId > 0L) {
+                repository.deleteShopOwnerAccountAndData(userId, shopId)
+            }
+            authManager.logoutShopOwner()
+            screenBackStack.clear()
+            _currentScreen.value = Screen.CustomerHome
+            _userMessage.value = "Shop Owner account, shop inventory, and cloud data permanently deleted."
+        }
+    }
+
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -590,12 +721,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            if (product.id == 0L) {
-                repository.addProduct(product)
+            val universalImageUrl = com.example.util.ImageStorageHelper.toUniversalImageUrl(
+                getApplication(),
+                product.imageUrl.ifBlank { "hero_local_mart" }
+            )
+            val productToSave = product.copy(imageUrl = universalImageUrl)
+            if (productToSave.id == 0L) {
+                val assignedId = repository.addProduct(productToSave)
+                val finalProd = productToSave.copy(id = assignedId)
                 _userMessage.value = "Product added successfully!"
+                launch(Dispatchers.IO) {
+                    try {
+                        FirestoreSyncService.pushProductToFirestore(finalProd)
+                    } catch (e: Throwable) {
+                        android.util.Log.w("MainViewModel", "Notice pushing product: ${e.message}")
+                    }
+                }
             } else {
-                repository.updateProduct(product)
+                repository.updateProduct(productToSave)
                 _userMessage.value = "Product updated successfully!"
+                launch(Dispatchers.IO) {
+                    try {
+                        FirestoreSyncService.pushProductToFirestore(productToSave)
+                    } catch (e: Throwable) {
+                        android.util.Log.w("MainViewModel", "Notice pushing product: ${e.message}")
+                    }
+                }
             }
         }
     }
@@ -620,6 +771,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.deleteProduct(product)
             _userMessage.value = "Product removed."
+            launch(Dispatchers.IO) {
+                try {
+                    FirestoreSyncService.deleteProductFromFirestore(product)
+                } catch (e: Throwable) {
+                    android.util.Log.w("MainViewModel", "Notice deleting product from cloud: ${e.message}")
+                }
+            }
         }
     }
 
@@ -636,7 +794,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            repository.updateProduct(product.copy(isAvailable = !product.isAvailable))
+            val updated = product.copy(isAvailable = !product.isAvailable)
+            repository.updateProduct(updated)
+            launch(Dispatchers.IO) {
+                try {
+                    FirestoreSyncService.pushProductToFirestore(updated)
+                } catch (e: Throwable) {
+                    android.util.Log.w("MainViewModel", "Notice toggling stock in cloud: ${e.message}")
+                }
+            }
         }
     }
 
@@ -955,7 +1121,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     address = address.trim().ifBlank { "Sinapali Main Market" },
                     phone = phone.trim(),
                     upiId = upiId.trim().ifBlank { "${phone.trim()}@upi" },
-                    imageUrl = imageUrl.trim().ifBlank { "hero_local_mart" },
+                    imageUrl = com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), imageUrl.trim().ifBlank { "hero_local_mart" }),
                     deliveryAvailable = deliveryAvailable,
                     isOpen = true,
                     isApproved = true,

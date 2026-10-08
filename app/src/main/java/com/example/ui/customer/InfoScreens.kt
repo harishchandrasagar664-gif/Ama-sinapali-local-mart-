@@ -1,6 +1,8 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.example.ui.customer
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,6 +37,7 @@ import com.example.ui.viewmodel.Screen
 
 @Composable
 fun PrivacyPolicyScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
 
@@ -64,48 +68,121 @@ fun PrivacyPolicyScreen(viewModel: MainViewModel) {
             item {
                 InfoBannerCard(
                     title = "Ama Sinapali Privacy Commitment",
-                    subtitle = "Last Updated: September 2026 • Sinapali, Nuapada, Odisha",
+                    subtitle = "Google Play Compliant Privacy Policy • Updated: October 2026 • Sinapali, Nuapada, Odisha",
                     icon = Icons.Default.Security
                 )
             }
 
             item {
                 InfoSectionCard(
-                    title = "1. Information We Collect",
-                    icon = Icons.Default.ContactPhone,
-                    content = "When you register or place an order on Ama Sinapali Local Mart, we collect:\n\n• Mobile Number or Email (verified via OTP) for account identification and order updates.\n• Customer Name for billing and package handover.\n• Delivery Address including Odisha District (Nuapada), Block (Sinapali), Gram Panchayat (GP), Village/Town, and full street/ward details.\n• Order and transaction history (Cash on Delivery receipts and cart items)."
+                    title = "1. Customer Personal Data We Collect & Store",
+                    icon = Icons.Default.Person,
+                    content = "When you register or order on Ama Sinapali Local Mart, we collect:\n\n• Mobile Number or Email (verified via OTP) for account creation, order verification, and dispatch updates.\n• Customer Full Name for billing and package handover.\n• Delivery Address: Odisha District (Nuapada), Block (Sinapali), Gram Panchayat (GP), Village/Town, and Ward/Street details.\n• Optional Customer Profile Picture (DP) uploaded from camera or photo library."
                 )
             }
 
             item {
                 InfoSectionCard(
-                    title = "2. How We Use Your Information",
-                    icon = Icons.Default.LocalShipping,
-                    content = "Your information is used strictly to provide hyper-local commerce services in Sinapali:\n\n• Dispatching orders to local shop merchants for preparation.\n• Accurate doorstep delivery by our local delivery personnel.\n• Sending order status notifications and verification OTPs.\n• Resolving customer queries, delivery tracking, and complaints."
+                    title = "2. Shop Owner / Merchant Data We Collect",
+                    icon = Icons.Default.Storefront,
+                    content = "For local shop merchants operating on Ama Sinapali:\n\n• Shop Owner Full Name, Mobile Number, and Email.\n• Shop Name, Physical Shop Address, Category, and Working Hours.\n• Product Catalog Data: Item names, Odia titles, prices, descriptions, unit measurements, and stock availability.\n• Shop Photos & Product Images: Uploaded storefront banners and product photos."
                 )
             }
 
             item {
                 InfoSectionCard(
-                    title = "3. Data Sharing & Security",
-                    icon = Icons.Default.Lock,
-                    content = "We do NOT sell, rent, or trade your personal information to third parties.\n\n• Only the assigned local shop owner sees the items ordered and delivery destination required for fulfillment.\n• All data is stored securely using local on-device encrypted Room storage and protected backend services.\n• Payment information for Cash on Delivery is handled in person upon verified item receipt."
+                    title = "3. Order Data & Transaction History",
+                    icon = Icons.Default.ReceiptLong,
+                    content = "To fulfill hyper-local purchases:\n\n• Cart Items & Order History: Quantities, ordered prices, selected shop partner, and timestamps.\n• Payment Method: Cash on Delivery (COD) collection status or digital payment references.\n• Delivery Status: Tracking milestones (Placed, Preparing, Out for Delivery, Delivered) and delivery agent assignment."
                 )
             }
 
             item {
                 InfoSectionCard(
-                    title = "4. Your Rights & Data Control",
-                    icon = Icons.Default.ManageAccounts,
-                    content = "You have full control over your saved information:\n\n• You can view and edit your saved Odisha delivery address anytime under My Profile.\n• You can change your registered phone or email by verifying via OTP.\n• To request account closure or data deletion, contact the Admin directly."
+                    title = "4. Device Storage & Firebase Backend Cloud Storage",
+                    icon = Icons.Default.CloudSync,
+                    content = "Where and how your data is processed:\n\n• Local Device Storage: Encrypted SQLite Room database stores active sessions, local cart, and offline viewing cache.\n• Firebase Cloud Backend (Firestore): Multi-tier cloud synchronization stores customer profiles, shop catalogs, active orders, and notifications to allow real-time order tracking and merchant fulfillment.\n• Cloud-hosted data is transmitted over TLS/HTTPS encrypted connections."
                 )
             }
 
             item {
                 InfoSectionCard(
-                    title = "5. Grievance Officer & Contact",
+                    title = "5. Admin Access & Safeguards",
                     icon = Icons.Default.AdminPanelSettings,
-                    content = "For any privacy-related queries, reach out to:\n\nHarishchandra Sagar (Administrator)\nAma Sinapali Local Mart\nPhysical Office Location: Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108\nMobile Number: 7894952827\nEmail: harishchandrasagar664@gmail.com"
+                    content = "Strict operational access limits:\n\n• Platform Administrator (Harishchandra Sagar) oversees delivery coordination, merchant approvals, and grievance redressal.\n• Assigned Shop Owners only access order details (customer name, items, and delivery address) strictly required to prepare and pack that specific order.\n• We DO NOT sell, rent, monetize, or broker personal user information to third-party ad networks or brokers."
+                )
+            }
+
+            item {
+                InfoSectionCard(
+                    title = "6. Profile Photos, Camera & Media",
+                    icon = Icons.Default.CameraAlt,
+                    content = "How images are handled:\n\n• Camera access is used solely when you choose to take a photo for your profile avatar or shop storefront.\n• Media selection uses the zero-permission Android system photo picker.\n• Images are stored locally and synced to your merchant/customer profile for visual recognition."
+                )
+            }
+
+            item {
+                InfoSectionCard(
+                    title = "7. Data Retention & Preservation Periods",
+                    icon = Icons.Default.Timelapse,
+                    content = "Data is retained only as long as necessary:\n\n• Account & Profile Information: Retained while your account remains active.\n• Carts & Drafts: Stored until checkout or cleared by you.\n• Completed Order Receipts: Anonymized order records and tax tallies may be retained as required by Indian commercial, GST, and accounting regulations.\n• When you request account deletion, all active personal identifying data is erased immediately."
+                )
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "8. Account Deletion & Data Wipe Rights",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        Text(
+                            "In full compliance with Google Play Store User Data Deletion Policy and global privacy standards, you have the right to request permanent deletion of your account and all associated personal data anytime.",
+                            fontSize = 13.sp,
+                            color = LocalTextPrimary
+                        )
+
+                        Text(
+                            "• In-App Deletion for Customers: Go to 'My Profile' > tap 'Delete Account & Wipe Data' to permanently erase your profile, delivery addresses, cart, profile picture, and Firebase cloud records.\n• In-App Deletion for Shop Owners: Go to 'Shop Overview' > tap 'Delete Shop Account & Wipe Cloud Data' to erase shop details, products, and merchant cloud entries.\n• External Web Deletion Method: If you do not have the app installed, submit an online deletion request using our dedicated web page below.",
+                            fontSize = 13.sp,
+                            color = LocalTextSecondary
+                        )
+
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html"))
+                                    context.startActivity(intent)
+                                } catch (_: Exception) { }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Open External Web Deletion Page", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            item {
+                InfoSectionCard(
+                    title = "9. Grievance Officer & Contact",
+                    icon = Icons.Default.ContactSupport,
+                    content = "For questions, rights requests, or deletion queries, contact our designated Grievance Officer:\n\nHarishchandra Sagar (Administrator & Grievance Officer)\nAma Sinapali Local Mart\nPhysical Address: Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108, India\nMobile Number: +91 7894952827\nEmail: harishchandrasagar664@gmail.com\nWebsite: https://ama-sinapali-local-mart.web.app"
                 )
             }
         }
@@ -278,11 +355,11 @@ fun AboutUsScreen(viewModel: MainViewModel) {
                             shape = CircleShape,
                             color = Color.White,
                             shadowElevation = 4.dp,
-                            modifier = Modifier.size(80.dp)
+                            modifier = Modifier.size(96.dp)
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.ic_mart_icon),
-                                contentDescription = "Ama Sinapali Local Mart Logo",
+                                painter = painterResource(id = R.drawable.img_sinapali_mart_logo),
+                                contentDescription = "Ama Sinapali Local Mart Official Logo",
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clip(CircleShape),
