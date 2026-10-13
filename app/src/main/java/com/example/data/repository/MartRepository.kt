@@ -44,6 +44,10 @@ class MartRepository(private val dao: MartDao) {
         } else {
             // Ensure full category list, promotions and new products are always available
             dao.insertCategories(SeedData.categories)
+            dao.deleteCategoryByName("Medicine & Healthcare")
+            dao.deleteCategoryByName("Medicine and Health Care")
+            dao.deleteProductsByCategory("Medicine & Healthcare")
+            dao.deleteProductsByCategory("Medicine and Health Care")
             val existingProducts = dao.getAllProducts().first()
             if (existingProducts.size < SeedData.products.size) {
                 dao.insertAllProducts(SeedData.products)

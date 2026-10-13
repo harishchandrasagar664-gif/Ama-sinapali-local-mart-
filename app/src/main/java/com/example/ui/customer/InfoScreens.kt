@@ -17,7 +17,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -161,18 +163,15 @@ fun PrivacyPolicyScreen(viewModel: MainViewModel) {
 
                         Button(
                             onClick = {
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html"))
-                                    context.startActivity(intent)
-                                } catch (_: Exception) { }
+                                viewModel.navigateTo(Screen.AccountDeletion)
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                            Icon(Icons.Default.DeleteForever, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open External Web Deletion Page", fontWeight = FontWeight.Bold)
+                            Text("Open Account Deletion Screen", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -182,7 +181,7 @@ fun PrivacyPolicyScreen(viewModel: MainViewModel) {
                 InfoSectionCard(
                     title = "9. Grievance Officer & Contact",
                     icon = Icons.Default.ContactSupport,
-                    content = "For questions, rights requests, or deletion queries, contact our designated Grievance Officer:\n\nHarishchandra Sagar (Administrator & Grievance Officer)\nAma Sinapali Local Mart\nPhysical Address: Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108, India\nMobile Number: +91 7894952827\nEmail: harishchandrasagar664@gmail.com\nWebsite: https://ama-sinapali-local-mart.web.app"
+                    content = "For questions, rights requests, or deletion queries, contact our designated Grievance Officer:\n\nHarishchandra Sagar (Administrator & Grievance Officer)\nAma Sinapali Local Mart\nPhysical Address: Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108, India\nMobile Number: +91 7894952827\nEmail: harishchandrasagar664@gmail.com\nLocation: Sinapali, Nuapada, Odisha"
                 )
             }
         }
@@ -656,5 +655,253 @@ private fun ContactRow(
             Text(label, fontSize = 12.sp, color = LocalTextMuted, fontWeight = FontWeight.Medium)
             Text(value, fontSize = 13.sp, color = LocalTextPrimary, fontWeight = FontWeight.SemiBold)
         }
+    }
+}
+
+@Composable
+fun AccountDeletionScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
+    val currentUser by viewModel.currentUser.collectAsState()
+    val currentRole by viewModel.currentRole.collectAsState()
+    val appLanguage by viewModel.appLanguage.collectAsState()
+    val isCustomerActive = viewModel.authManager.isCustomerSessionActive() || (currentUser?.isVerified == true && currentUser?.id != null)
+    val isShopOwnerActive = viewModel.authManager.isShopOwnerSessionActive() || (currentRole == com.example.domain.model.UserRole.SHOP_OWNER)
+
+    var showConfirmDialog by remember { mutableStateOf(false) }
+    var deletionReason by remember { mutableStateOf("") }
+    var confirmedRisk by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Account Deletion", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = { viewModel.navigateBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White
+                )
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Permanent Data Wipe Request",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Text(
+                            "Under Google Play Store policies and privacy laws, you can permanently erase your account, contact details, delivery addresses, shopping carts, and Firebase cloud records anytime.",
+                            fontSize = 13.sp,
+                            color = LocalTextPrimary
+                        )
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Active Account Status", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        if (currentUser != null) {
+                            Text("• Registered Name: ${currentUser?.name}", fontSize = 13.sp)
+                            Text("• Mobile Number: ${currentUser?.phone}", fontSize = 13.sp)
+                            Text("• Account Role: ${if (isShopOwnerActive) "Shop Owner / Merchant" else "Customer"}", fontSize = 13.sp)
+                            Text("• Account ID: #${currentUser?.id}", fontSize = 13.sp, color = LocalTextSecondary)
+                        } else {
+                            Text(
+                                "No local user session currently active. If you uninstalled the app or lost your device, use the verified web deletion form below.",
+                                fontSize = 13.sp,
+                                color = LocalTextSecondary
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("What will be deleted immediately:", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("1. Account Profile: Mobile number, name, and profile picture (DP).", fontSize = 12.sp, color = LocalTextSecondary)
+                        Text("2. Location & Addresses: Saved Sinapali delivery address, GP, and village.", fontSize = 12.sp, color = LocalTextSecondary)
+                        Text("3. Shopping Records: Active cart items and notification preferences.", fontSize = 12.sp, color = LocalTextSecondary)
+                        Text("4. Cloud Records: Corresponding documents in Firebase Firestore collections (users, shops, products).", fontSize = 12.sp, color = LocalTextSecondary)
+                        Text("5. Statutory Exception: Historical completed transactions are anonymized for tax & GST accounting as required by Indian law.", fontSize = 12.sp, color = LocalTextSecondary)
+                    }
+                }
+            }
+
+            if (currentUser != null) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("Confirm & Delete Account Now", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.error)
+
+                            OutlinedTextField(
+                                value = deletionReason,
+                                onValueChange = { deletionReason = it },
+                                label = { Text("Reason for Deletion (Optional)") },
+                                placeholder = { Text("Tell us why you are leaving (optional)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { confirmedRisk = !confirmedRisk }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = confirmedRisk,
+                                    onCheckedChange = { confirmedRisk = it }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "I understand that this action is irreversible and my account and cloud records will be permanently erased.",
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+
+                            Button(
+                                onClick = { showConfirmDialog = true },
+                                enabled = confirmedRisk,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.DeleteForever, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Permanently Delete My Account", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Privacy Policy & Support Information", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(
+                            "Review our complete Privacy Policy and data retention terms, or contact our Grievance Officer directly if you have queries regarding your account deletion:",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { viewModel.navigateTo(Screen.PrivacyPolicy) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.filledTonalButtonColors(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Privacy Policy", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { viewModel.navigateTo(Screen.ContactUs) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.filledTonalButtonColors(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.ContactSupport, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Contact Admin", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                InfoSectionCard(
+                    title = "Grievance Officer Direct Contact",
+                    icon = Icons.Default.ContactSupport,
+                    content = "Harishchandra Sagar (Administrator & Grievance Officer)\nAma Sinapali Local Mart\nLocation: Kotamal, Sinapali Main Road, Dist: Nuapada, Odisha - 766108\nMobile Helpline: +91 7894952827\nEmail: harishchandrasagar664@gmail.com"
+                )
+            }
+        }
+    }
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            icon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Confirm Permanent Deletion?", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) },
+            text = {
+                Text(
+                    "Are you absolutely sure? All data associated with ${currentUser?.name ?: "this account"} (${currentUser?.phone ?: ""}) will be permanently wiped from our database and Firebase backend immediately.",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showConfirmDialog = false
+                        if (isShopOwnerActive) {
+                            viewModel.deleteShopOwnerAccount()
+                        } else {
+                            viewModel.deleteCustomerAccount()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Yes, Delete Everything", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

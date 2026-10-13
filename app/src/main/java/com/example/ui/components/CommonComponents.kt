@@ -11,10 +11,12 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -25,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import java.io.File
+import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.Shape
 import com.example.R
 import com.example.data.local.entities.ProductEntity
@@ -263,6 +266,32 @@ fun ProductImage(
                     modifier = Modifier.fillMaxSize(),
                     contentScale = contentScale
                 )
+            }
+            imageUrl.startsWith("data:") -> {
+                val bitmap = remember(imageUrl) {
+                    try {
+                        val base64Data = imageUrl.substringAfter(",")
+                        val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = contentScale
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.hero_local_mart),
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = contentScale
+                    )
+                }
             }
             else -> {
                 val cleanPath = imageUrl.removePrefix("file:")

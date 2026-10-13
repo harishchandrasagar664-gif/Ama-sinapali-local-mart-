@@ -950,6 +950,26 @@ fun ShopOwnerAuthScreen(
                     Text("Return to Customer Store View")
                 }
             }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { viewModel.navigateTo(Screen.PrivacyPolicy) }) {
+                        Text("Privacy Policy", fontSize = 12.sp, color = LocalTealPrimary)
+                    }
+                    Text("•", fontSize = 12.sp, color = LocalTextSecondary)
+                    TextButton(onClick = { viewModel.navigateTo(Screen.TermsConditions) }) {
+                        Text("Terms & Conditions", fontSize = 12.sp, color = LocalTealPrimary)
+                    }
+                    Text("•", fontSize = 12.sp, color = LocalTextSecondary)
+                    TextButton(onClick = { viewModel.navigateTo(Screen.AccountDeletion) }) {
+                        Text("Account Deletion", fontSize = 12.sp, color = Color(0xFFD32F2F))
+                    }
+                }
+            }
         }
     }
 }

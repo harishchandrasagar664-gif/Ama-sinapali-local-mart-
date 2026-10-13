@@ -908,6 +908,22 @@ fun CustomerAuthScreen(
                     }
                 }
             }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { viewModel.navigateTo(Screen.PrivacyPolicy) }) {
+                        Text(s.privacyPolicy, fontSize = 12.sp, color = LocalTealPrimary)
+                    }
+                    Text("•", fontSize = 12.sp, color = LocalTextSecondary)
+                    TextButton(onClick = { viewModel.navigateTo(Screen.TermsConditions) }) {
+                        Text(s.termsConditions, fontSize = 12.sp, color = LocalTealPrimary)
+                    }
+                }
+            }
         }
     }
 }

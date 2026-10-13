@@ -131,6 +131,12 @@ interface MartDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategories(categories: List<CategoryEntity>)
 
+    @Query("DELETE FROM categories WHERE name = :name")
+    suspend fun deleteCategoryByName(name: String)
+
+    @Query("DELETE FROM products WHERE category = :category")
+    suspend fun deleteProductsByCategory(category: String)
+
     // Cart
     @Query("SELECT * FROM cart_items WHERE userId = :userId")
     fun getCartItems(userId: Long): Flow<List<CartItemEntity>>

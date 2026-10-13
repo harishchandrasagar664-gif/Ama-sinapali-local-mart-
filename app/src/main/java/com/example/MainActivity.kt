@@ -217,6 +217,7 @@ class MainActivity : ComponentActivity() {
                             }
                             is Screen.CustomerHelp -> CustomerHelpScreen(viewModel)
                             is Screen.PrivacyPolicy -> PrivacyPolicyScreen(viewModel)
+                            is Screen.AccountDeletion -> AccountDeletionScreen(viewModel)
                             is Screen.ContactUs -> ContactUsScreen(viewModel)
                             is Screen.AboutUs -> AboutUsScreen(viewModel)
                             is Screen.TermsConditions -> TermsConditionsScreen(viewModel)

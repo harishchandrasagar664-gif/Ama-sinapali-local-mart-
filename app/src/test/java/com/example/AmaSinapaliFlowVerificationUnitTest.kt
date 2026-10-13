@@ -383,20 +383,22 @@ class AmaSinapaliFlowVerificationUnitTest {
     @Test
     fun testSettingsAndPolicyScreens_NavigationRoutesExist() {
         val privacy = com.example.ui.viewmodel.Screen.PrivacyPolicy
+        val accountDeletion = com.example.ui.viewmodel.Screen.AccountDeletion
         val contact = com.example.ui.viewmodel.Screen.ContactUs
         val about = com.example.ui.viewmodel.Screen.AboutUs
         val terms = com.example.ui.viewmodel.Screen.TermsConditions
         val returns = com.example.ui.viewmodel.Screen.ReturnsRefunds
 
         assertNotNull(privacy)
+        assertNotNull(accountDeletion)
         assertNotNull(contact)
         assertNotNull(about)
         assertNotNull(terms)
         assertNotNull(returns)
 
         // Verify distinct instances/objects
-        val screens = listOf(privacy, contact, about, terms, returns)
-        assertEquals(5, screens.distinct().size)
+        val screens = listOf(privacy, accountDeletion, contact, about, terms, returns)
+        assertEquals(6, screens.distinct().size)
     }
 
     @Test

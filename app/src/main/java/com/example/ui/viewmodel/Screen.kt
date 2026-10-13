@@ -16,6 +16,7 @@ sealed class Screen {
     object CustomerAddresses : Screen()
     object CustomerHelp : Screen()
     object PrivacyPolicy : Screen()
+    object AccountDeletion : Screen()
     object ContactUs : Screen()
     object AboutUs : Screen()
     object TermsConditions : Screen()

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -49,6 +50,9 @@ import com.example.ui.components.ProfilePhotoUploadDialog
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.UserAvatar
 import com.example.util.ImageStorageHelper
+import com.example.util.FirebaseStorageHelper
+import com.example.util.StorageUploadResult
+import kotlinx.coroutines.launch
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -291,23 +295,26 @@ fun ShopOwnerDashboardScreen(
                             Text("Delete Shop Account & Wipe Cloud Data", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFD32F2F))
                         }
 
-                        TextButton(
-                            onClick = {
-                                try {
-                                    val intent = android.content.Intent(
-                                        android.content.Intent.ACTION_VIEW,
-                                        android.net.Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html")
-                                    )
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {
-                                    viewModel.navigateTo(Screen.PrivacyPolicy)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(14.dp), tint = LocalTextSecondary)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("External Web Account-Deletion Page", fontSize = 11.sp, color = LocalTextSecondary)
+                            TextButton(
+                                onClick = { viewModel.navigateTo(Screen.AccountDeletion) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFD32F2F))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Account Deletion", fontSize = 11.sp, color = Color(0xFFD32F2F))
+                            }
+                            TextButton(
+                                onClick = { viewModel.navigateTo(Screen.PrivacyPolicy) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(14.dp), tint = LocalTealPrimary)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Privacy Policy", fontSize = 11.sp, color = LocalTealPrimary)
+                            }
                         }
                     }
                 }
@@ -620,17 +627,42 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var imageSourceDescription by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    var isUploadingImage by remember { mutableStateOf(false) }
+    var uploadStatusMessage by remember { mutableStateOf<String?>(null) }
 
     // Photo Picker (Gallery)
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val permanentPath = ImageStorageHelper.copyProductUri(context, uri)
-            savedImagePath = permanentPath ?: uri.toString()
             selectedImageUri = uri
             capturedBitmap = null
-            imageSourceDescription = "Photo saved to app storage"
+            isUploadingImage = true
+            uploadStatusMessage = "Uploading to Firebase Storage... ☁️"
+
+            val localPath = ImageStorageHelper.copyProductUri(context, uri)
+            savedImagePath = localPath ?: uri.toString()
+
+            scope.launch {
+                val result = FirebaseStorageHelper.uploadProductUri(context, uri, myShop?.id ?: 0L)
+                when (result) {
+                    is StorageUploadResult.Success -> {
+                        savedImagePath = result.downloadUrl
+                        uploadStatusMessage = "Uploaded to Firebase Storage ☁️"
+                        isUploadingImage = false
+                    }
+                    is StorageUploadResult.Fallback -> {
+                        savedImagePath = result.dataUrl
+                        uploadStatusMessage = "Cloud image ready"
+                        isUploadingImage = false
+                    }
+                    is StorageUploadResult.Error -> {
+                        uploadStatusMessage = result.errorMessage
+                        isUploadingImage = false
+                    }
+                }
+            }
         }
     }
 
@@ -639,11 +671,33 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            val permanentPath = ImageStorageHelper.saveProductBitmap(context, bitmap)
-            savedImagePath = permanentPath
             capturedBitmap = bitmap
             selectedImageUri = null
-            imageSourceDescription = "Captured & saved to app storage"
+            isUploadingImage = true
+            uploadStatusMessage = "Uploading to Firebase Storage... ☁️"
+
+            val localPath = ImageStorageHelper.saveProductBitmap(context, bitmap)
+            savedImagePath = localPath
+
+            scope.launch {
+                val result = FirebaseStorageHelper.uploadProductBitmap(context, bitmap, myShop?.id ?: 0L)
+                when (result) {
+                    is StorageUploadResult.Success -> {
+                        savedImagePath = result.downloadUrl
+                        uploadStatusMessage = "Uploaded to Firebase Storage ☁️"
+                        isUploadingImage = false
+                    }
+                    is StorageUploadResult.Fallback -> {
+                        savedImagePath = result.dataUrl
+                        uploadStatusMessage = "Cloud image ready"
+                        isUploadingImage = false
+                    }
+                    is StorageUploadResult.Error -> {
+                        uploadStatusMessage = result.errorMessage
+                        isUploadingImage = false
+                    }
+                }
+            }
         }
     }
 
@@ -803,41 +857,18 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             }
                         }
 
-                        Text("Product Image (Universal Cloud Sync across Mobiles)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        OutlinedTextField(
-                            value = savedImagePath ?: "",
-                            onValueChange = {
-                                savedImagePath = it
-                                imageSourceDescription = if (it.isNotBlank()) "Custom Image URL" else null
-                            },
-                            label = { Text("Product Image URL or Link") },
-                            placeholder = { Text("https://... or paste image link") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            trailingIcon = {
-                                if (!savedImagePath.isNullOrBlank()) {
-                                    IconButton(onClick = { savedImagePath = null; imageSourceDescription = null }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear Image URL")
-                                    }
-                                }
-                            }
+                        Text("Product Photo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(
+                            "Select a photo from Gallery or take a picture with Camera. The photo will be uploaded directly to Firebase Storage and saved with the product.",
+                            fontSize = 12.sp,
+                            color = LocalTextSecondary
                         )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
-                                onClick = {
-                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.CameraAlt, contentDescription = "Camera", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Camera", fontSize = 12.sp)
-                            }
-                            OutlinedButton(
+                            Button(
                                 onClick = {
                                     galleryLauncher.launch(
                                         androidx.activity.result.PickVisualMediaRequest(
@@ -845,75 +876,145 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                                         )
                                     )
                                 },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                enabled = !isUploadingImage
                             ) {
                                 Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Gallery", fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Gallery", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                enabled = !isUploadingImage
+                            ) {
+                                Icon(Icons.Default.CameraAlt, contentDescription = "Camera", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Camera", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        // Uploading progress indicator
+                        if (isUploadingImage) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalTealPrimary)
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(uploadStatusMessage ?: "Uploading to Firebase Storage...", fontSize = 12.sp, color = LocalTealDark)
+                                }
                             }
                         }
 
                         // Preview of selected or existing image
-                        if (!savedImagePath.isNullOrBlank()) {
+                        if (!savedImagePath.isNullOrBlank() || selectedImageUri != null || capturedBitmap != null) {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(110.dp),
-                                shape = RoundedCornerShape(8.dp)
+                                    .height(130.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                             ) {
-                                ProductImage(
-                                    imageUrl = savedImagePath,
-                                    contentDescription = "Product Image Preview",
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    ProductImage(
+                                        imageUrl = savedImagePath,
+                                        contentDescription = "Product Image Preview",
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            savedImagePath = null
+                                            selectedImageUri = null
+                                            capturedBitmap = null
+                                            uploadStatusMessage = null
+                                        },
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp)
+                                            .size(28.dp)
+                                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove photo", tint = Color.White, modifier = Modifier.size(16.dp))
+                                    }
+                                }
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(imageSourceDescription ?: "Universal cloud image ready (synced to Firebase ☁️)", fontSize = 11.sp, color = LocalSuccess)
+                            if (!uploadStatusMessage.isNullOrBlank() && !isUploadingImage) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(uploadStatusMessage!!, fontSize = 11.sp, color = LocalSuccess, fontWeight = FontWeight.Medium)
+                                }
                             }
+                        } else if (editingProduct == null) {
+                            Text(
+                                "📸 Please select a photo using Gallery or Camera to proceed.",
+                                fontSize = 11.sp,
+                                color = LocalTealPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
                 },
                 confirmButton = {
-                    Button(onClick = {
-                        val price = prodPrice.toDoubleOrNull() ?: 100.0
-                        val rawImageUrl = savedImagePath
-                            ?: selectedImageUri?.let { ImageStorageHelper.copyProductUri(context, it) }
-                            ?: capturedBitmap?.let { ImageStorageHelper.saveProductBitmap(context, it) }
-                            ?: editingProduct?.imageUrl
-                            ?: "hero_local_mart"
-                        val finalImageUrl = ImageStorageHelper.toUniversalImageUrl(context, rawImageUrl)
+                    val hasImage = !savedImagePath.isNullOrBlank() || editingProduct != null
+                    Button(
+                        onClick = {
+                            val price = prodPrice.toDoubleOrNull() ?: 100.0
+                            val finalImageUrl = savedImagePath
+                                ?: selectedImageUri?.let { ImageStorageHelper.copyProductUri(context, it) }
+                                ?: capturedBitmap?.let { ImageStorageHelper.saveProductBitmap(context, it) }
+                                ?: editingProduct?.imageUrl
+                                ?: "hero_local_mart"
 
-                        if (editingProduct != null) {
-                            val updated = editingProduct!!.copy(
-                                name = prodName.ifBlank { editingProduct!!.name },
-                                price = price,
-                                category = prodCat.ifBlank { editingProduct!!.category },
-                                imageUrl = finalImageUrl
-                            )
-                            viewModel.addOrUpdateProduct(updated)
-                        } else {
-                            val newProd = ProductEntity(
-                                shopId = myShop.id,
-                                name = prodName.ifBlank { "Local Product" },
-                                category = prodCat.ifBlank { "Groceries & Spices" },
-                                imageUrl = finalImageUrl,
-                                description = "Freshly supplied by ${myShop.name}",
-                                price = price,
-                                unit = "1 unit",
-                                stock = 20
-                            )
-                            viewModel.addOrUpdateProduct(newProd)
-                        }
-                        showProductDialog = false
-                        editingProduct = null
-                        selectedImageUri = null
-                        capturedBitmap = null
-                        savedImagePath = null
-                        imageSourceDescription = null
-                    }) {
-                        Text(if (editingProduct != null) "Save" else "Add")
+                            if (editingProduct != null) {
+                                val updated = editingProduct!!.copy(
+                                    name = prodName.ifBlank { editingProduct!!.name },
+                                    price = price,
+                                    category = prodCat.ifBlank { editingProduct!!.category },
+                                    imageUrl = finalImageUrl
+                                )
+                                viewModel.addOrUpdateProduct(updated)
+                            } else {
+                                val newProd = ProductEntity(
+                                    shopId = myShop.id,
+                                    name = prodName.ifBlank { "Local Product" },
+                                    category = prodCat.ifBlank { "Groceries & Spices" },
+                                    imageUrl = finalImageUrl,
+                                    description = "Freshly supplied by ${myShop.name}",
+                                    price = price,
+                                    unit = "1 unit",
+                                    stock = 20
+                                )
+                                viewModel.addOrUpdateProduct(newProd)
+                            }
+                            showProductDialog = false
+                            editingProduct = null
+                            selectedImageUri = null
+                            capturedBitmap = null
+                            savedImagePath = null
+                            isUploadingImage = false
+                            uploadStatusMessage = null
+                        },
+                        enabled = prodName.isNotBlank() && !isUploadingImage && hasImage
+                    ) {
+                        Text(
+                            if (isUploadingImage) "Uploading..."
+                            else if (!hasImage) "Select Photo First"
+                            else if (editingProduct != null) "Save"
+                            else "Add Product"
+                        )
                     }
                 },
                 dismissButton = {

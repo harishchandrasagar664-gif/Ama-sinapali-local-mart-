@@ -734,17 +734,10 @@ fun CustomerProfileScreen(
                         HorizontalDivider()
 
                         ProfileNavRow(
-                            icon = Icons.Default.OpenInBrowser,
-                            title = s.webDeletionRequestOption,
-                            subtitle = "Online request form to wipe account & personal data",
-                            onClick = {
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ama-sinapali-local-mart.web.app/delete-account.html"))
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {
-                                    viewModel.navigateTo(Screen.PrivacyPolicy)
-                                }
-                            }
+                            icon = Icons.Default.DeleteForever,
+                            title = if (appLanguage == AppLanguage.ODIA) "ଖାତା ଡିଲିଟ୍ ଏବଂ ତଥ୍ୟ ଅପସାରଣ (Account Deletion)" else "Account Deletion & Data Wipe",
+                            subtitle = "Permanently delete account, saved addresses and cloud data",
+                            onClick = { viewModel.navigateTo(Screen.AccountDeletion) }
                         )
                     }
                 }

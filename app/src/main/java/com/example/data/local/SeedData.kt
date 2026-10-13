@@ -138,7 +138,6 @@ object SeedData {
         "Home & Kitchen Essentials",
         "Puja & Festive Items",
         "Stationery & Books",
-        "Medicine & Healthcare",
         "Baby Care & Toys",
         "Hardware & Electricals",
         "Paan & Refreshments"
@@ -174,7 +173,6 @@ object SeedData {
         CategoryEntity(id = 27, name = "Home & Kitchen Essentials", iconName = "Kitchen", description = "Cookware, utensils, steel bottles, cleaning supplies"),
         CategoryEntity(id = 28, name = "Puja & Festive Items", iconName = "SelfImprovement", description = "Agarbatti, camphor, brass diyas, puja samagri"),
         CategoryEntity(id = 29, name = "Stationery & Books", iconName = "Book", description = "Notebooks, pens, school supplies & office stationery"),
-        CategoryEntity(id = 30, name = "Medicine & Healthcare", iconName = "MedicalServices", description = "First aid essentials, OTC medicine, ORS & wellness"),
         CategoryEntity(id = 31, name = "Baby Care & Toys", iconName = "ChildCare", description = "Baby food, diapers, baby wipes & local toys"),
         CategoryEntity(id = 32, name = "Hardware & Electricals", iconName = "Build", description = "LED bulbs, extension cords, plugs, switches & tools"),
         CategoryEntity(id = 33, name = "Paan & Refreshments", iconName = "EmojiFoodBeverage", description = "Sinapali sweet meetha paan & mukhwas")
@@ -527,30 +525,6 @@ object SeedData {
             discountPrice = 80.0,
             unit = "10 pens",
             stock = 40,
-            imageUrl = "hero_local_mart"
-        ),
-        ProductEntity(
-            id = 30,
-            shopId = 1,
-            name = "First Aid Emergency Kit Box",
-            category = "Medicine & Healthcare",
-            description = "Contains antiseptic lotion, bandages, medical tape, cotton, and ointment.",
-            price = 250.0,
-            discountPrice = 210.0,
-            unit = "1 kit box",
-            stock = 15,
-            imageUrl = "hero_local_mart"
-        ),
-        ProductEntity(
-            id = 31,
-            shopId = 1,
-            name = "ORS Hydration Electrolyte Packets (Pack of 5)",
-            category = "Medicine & Healthcare",
-            description = "WHO recommended formula for instant energy and rehydration.",
-            price = 75.0,
-            discountPrice = 65.0,
-            unit = "5 sachets",
-            stock = 30,
             imageUrl = "hero_local_mart"
         ),
         ProductEntity(
