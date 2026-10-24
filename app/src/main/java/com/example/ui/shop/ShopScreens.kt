@@ -918,20 +918,30 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             }
                         }
 
-                        // Preview of selected or existing image
+                        // Preview of selected or existing image (contain/fit full photo without cropping)
                         if (!savedImagePath.isNullOrBlank() || selectedImageUri != null || capturedBitmap != null) {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(130.dp),
+                                    .heightIn(min = 220.dp, max = 340.dp),
                                 shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                             ) {
-                                Box(modifier = Modifier.fillMaxSize()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 220.dp, max = 340.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
                                     ProductImage(
-                                        imageUrl = savedImagePath,
+                                        imageUrl = savedImagePath ?: selectedImageUri?.toString(),
                                         contentDescription = "Product Image Preview",
-                                        modifier = Modifier.fillMaxSize()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 220.dp, max = 340.dp)
+                                            .padding(6.dp),
+                                        contentScale = ContentScale.Fit
                                     )
                                     IconButton(
                                         onClick = {
@@ -942,9 +952,9 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                                         },
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
-                                            .padding(6.dp)
-                                            .size(28.dp)
-                                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                            .padding(8.dp)
+                                            .size(30.dp)
+                                            .background(Color.Black.copy(alpha = 0.65f), CircleShape)
                                     ) {
                                         Icon(Icons.Default.Close, contentDescription = "Remove photo", tint = Color.White, modifier = Modifier.size(16.dp))
                                     }

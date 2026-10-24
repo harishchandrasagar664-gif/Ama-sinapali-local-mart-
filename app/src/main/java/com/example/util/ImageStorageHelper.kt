@@ -23,7 +23,7 @@ object ImageStorageHelper {
      * Converts an Android Bitmap into a compressed universal Base64 data URL
      * suitable for cross-device cloud synchronization via Firebase.
      */
-    fun bitmapToDataUrl(bitmap: Bitmap, maxDim: Int = 320, quality: Int = 82): String {
+    fun bitmapToDataUrl(bitmap: Bitmap, maxDim: Int = 640, quality: Int = 85): String {
         return try {
             val scaled = if (bitmap.width > maxDim || bitmap.height > maxDim) {
                 val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
@@ -46,7 +46,7 @@ object ImageStorageHelper {
     /**
      * Converts a content Uri from Photo Picker/Gallery into a universal Base64 data URL.
      */
-    fun uriToDataUrl(context: Context, uri: Uri, maxDim: Int = 320, quality: Int = 82): String? {
+    fun uriToDataUrl(context: Context, uri: Uri, maxDim: Int = 640, quality: Int = 85): String? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val bitmap = BitmapFactory.decodeStream(stream)

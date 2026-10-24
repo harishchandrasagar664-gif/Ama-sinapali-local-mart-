@@ -1192,8 +1192,9 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
                     contentDescription = product.name,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp),
-                    shape = RoundedCornerShape(12.dp)
+                        .heightIn(min = 260.dp, max = 400.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    contentScale = ContentScale.Fit
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(product.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)

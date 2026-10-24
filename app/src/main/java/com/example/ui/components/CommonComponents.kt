@@ -228,14 +228,14 @@ fun ProductImage(
     imageUrl: String?,
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
-    contentScale: ContentScale = ContentScale.Crop,
+    contentScale: ContentScale = ContentScale.Fit,
     shape: Shape = RoundedCornerShape(8.dp),
     fallbackIcon: ImageVector = Icons.Default.ShoppingBag
 ) {
     Surface(
         modifier = modifier,
         shape = shape,
-        color = Color(0xFFF1F5F9)
+        color = Color(0xFFF8FAFC)
     ) {
         when {
             imageUrl.isNullOrBlank() -> {
@@ -356,13 +356,16 @@ fun ProductCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(130.dp)
+                    .height(150.dp)
+                    .background(Color(0xFFF8FAFC)),
+                contentAlignment = Alignment.Center
             ) {
                 ProductImage(
                     imageUrl = product.imageUrl,
                     contentDescription = product.name,
                     modifier = Modifier.fillMaxSize(),
-                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 0.dp)
+                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                    contentScale = ContentScale.Fit
                 )
                 if (product.stock <= 0) {
                     Surface(

@@ -93,6 +93,52 @@ object FirebaseStorageHelper {
         uri: Uri,
         shopId: Long
     ): StorageUploadResult = withContext(Dispatchers.IO) {
+        val timestamp = System.currentTimeMillis()
+        val mimeType = try {
+            context.contentResolver.getType(uri) ?: "image/jpeg"
+        } catch (_: Throwable) {
+            "image/jpeg"
+        }
+        val extension = when {
+            mimeType.contains("png", ignoreCase = true) -> "png"
+            mimeType.contains("webp", ignoreCase = true) -> "webp"
+            else -> "jpg"
+        }
+        val fileName = "product_${shopId}_${timestamp}.$extension"
+
+        // 1. Try uploading the exact original untouched bytes directly from device storage
+        val originalBytes = try {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (e: Exception) {
+            null
+        }
+
+        if (originalBytes != null && originalBytes.isNotEmpty() && originalBytes.size <= 12 * 1024 * 1024) {
+            try {
+                val storageRef = getStorageRef()
+                val productRef = storageRef.child("products").child("shop_$shopId").child(fileName)
+
+                val metadata = StorageMetadata.Builder()
+                    .setContentType(mimeType)
+                    .setCustomMetadata("shopId", shopId.toString())
+                    .setCustomMetadata("uploadedAt", timestamp.toString())
+                    .build()
+
+                val uploadTask = productRef.putBytes(originalBytes, metadata)
+                Tasks.await(uploadTask, 15, TimeUnit.SECONDS)
+
+                val downloadUriTask = productRef.downloadUrl
+                val downloadUri = Tasks.await(downloadUriTask, 10, TimeUnit.SECONDS)
+
+                val downloadUrl = downloadUri.toString()
+                Log.i(TAG, "Successfully uploaded original untouched photo to Firebase Storage: $downloadUrl")
+                return@withContext StorageUploadResult.Success(downloadUrl)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Notice: Direct byte upload fallback to normalized bitmap: ${e.message}")
+            }
+        }
+
+        // 2. Fallback: decode bitmap, normalize orientation, and upload without cropping
         val rawBitmap = try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream)
