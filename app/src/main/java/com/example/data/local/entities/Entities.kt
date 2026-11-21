@@ -20,7 +20,8 @@ data class UserEntity(
     val gp: String = "Sinapali",
     val village: String = "Sinapali",
     val deliveryAddress: String = "Near Panchayat Samiti Office, Word No 4, Sinapali",
-    val profilePhotoUri: String? = null
+    val profilePhotoUri: String? = null,
+    val firebaseUid: String = ""
 )
 
 @Entity(tableName = "shops")
@@ -40,7 +41,8 @@ data class ShopEntity(
     val minOrderAmount: Double = 50.0,
     val estimatedDeliveryMins: Int = 30,
     val isApproved: Boolean = true,
-    val imageUrl: String = "hero_local_mart"
+    val imageUrl: String = "hero_local_mart",
+    val ownerUid: String = ""
 )
 
 @Entity(tableName = "categories")
@@ -66,7 +68,8 @@ data class ProductEntity(
     val stock: Int = 10,
     val isAvailable: Boolean = true,
     val imageUrl: String = "hero_local_mart",
-    val isApproved: Boolean = true
+    val isApproved: Boolean = true,
+    val ownerUid: String = ""
 )
 
 @Entity(tableName = "cart_items")
@@ -101,7 +104,9 @@ data class OrderEntity(
     val orderNotes: String = "",
     val placedAt: Long = System.currentTimeMillis(),
     val deliveryAgentAssigned: String? = null,
-    val estimatedDeliveryTime: Long = System.currentTimeMillis() + 1800000
+    val estimatedDeliveryTime: Long = System.currentTimeMillis() + 1800000,
+    val customerUid: String = "",
+    val shopOwnerUid: String = ""
 )
 
 @Entity(tableName = "order_items")

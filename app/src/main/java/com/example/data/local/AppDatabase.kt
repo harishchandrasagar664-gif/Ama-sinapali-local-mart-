@@ -27,7 +27,7 @@ import com.example.data.local.entities.*
         ComplaintEntity::class,
         PaymentRecordEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -43,6 +43,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE users ADD COLUMN firebaseUid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE shops ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE products ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE orders ADD COLUMN customerUid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE orders ADD COLUMN shopOwnerUid TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -50,7 +60,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ama_local_mart_database"
                 )
-                .addMigrations(MIGRATION_2_3)
+                .addMigrations(MIGRATION_2_3, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

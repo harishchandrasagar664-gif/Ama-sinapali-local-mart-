@@ -138,10 +138,21 @@ object FirebaseStorageHelper {
             }
         }
 
-        // 2. Fallback: decode bitmap, normalize orientation, and upload without cropping
+        // 2. Fallback: decode bitmap with bounds downsampling, normalize orientation, and upload without cropping
         val rawBitmap = try {
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)
+                BitmapFactory.decodeStream(stream, null, boundsOpts)
+            }
+            var sampleSize = 1
+            if (boundsOpts.outWidth > 1024 || boundsOpts.outHeight > 1024) {
+                while ((boundsOpts.outWidth / (sampleSize * 2)) >= 1024 && (boundsOpts.outHeight / (sampleSize * 2)) >= 1024) {
+                    sampleSize *= 2
+                }
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOpts)
             }
         } catch (e: Exception) {
             null

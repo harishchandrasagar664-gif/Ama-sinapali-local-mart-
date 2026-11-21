@@ -16,11 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,6 +38,7 @@ import com.example.domain.model.OrderStatus
 import com.example.domain.model.UserRole
 import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
+import com.example.util.ProductDiscountUtils
 
 @Composable
 fun OdiaGreetingHeader(
@@ -229,13 +232,15 @@ fun ProductImage(
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
     contentScale: ContentScale = ContentScale.Fit,
+    alignment: Alignment = Alignment.Center,
+    backgroundColor: Color = Color.White,
     shape: Shape = RoundedCornerShape(8.dp),
     fallbackIcon: ImageVector = Icons.Default.ShoppingBag
 ) {
     Surface(
         modifier = modifier,
         shape = shape,
-        color = Color(0xFFF8FAFC)
+        color = backgroundColor
     ) {
         when {
             imageUrl.isNullOrBlank() -> {
@@ -256,6 +261,7 @@ fun ProductImage(
                     painter = painterResource(id = R.drawable.ic_mart_icon),
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),
+                    alignment = alignment,
                     contentScale = contentScale
                 )
             }
@@ -264,6 +270,7 @@ fun ProductImage(
                     painter = painterResource(id = R.drawable.hero_local_mart),
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),
+                    alignment = alignment,
                     contentScale = contentScale
                 )
             }
@@ -282,6 +289,7 @@ fun ProductImage(
                         bitmap = bitmap.asImageBitmap(),
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize(),
+                        alignment = alignment,
                         contentScale = contentScale
                     )
                 } else {
@@ -289,6 +297,7 @@ fun ProductImage(
                         painter = painterResource(id = R.drawable.hero_local_mart),
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize(),
+                        alignment = alignment,
                         contentScale = contentScale
                     )
                 }
@@ -305,12 +314,13 @@ fun ProductImage(
                     model = model,
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),
+                    alignment = alignment,
                     contentScale = contentScale,
                     loading = {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Color(0xFFE2E8F0)),
+                                .background(backgroundColor),
                             contentAlignment = Alignment.Center
                         ) {
                             CircularProgressIndicator(
@@ -325,6 +335,7 @@ fun ProductImage(
                             painter = painterResource(id = R.drawable.hero_local_mart),
                             contentDescription = contentDescription,
                             modifier = Modifier.fillMaxSize(),
+                            alignment = alignment,
                             contentScale = contentScale
                         )
                     }
@@ -344,6 +355,9 @@ fun ProductCard(
     language: AppLanguage = AppLanguage.ENGLISH
 ) {
     val s = AppStrings.get(language)
+    val discountInfo = remember(product.price, product.discountPrice) {
+        ProductDiscountUtils.calculate(product.price, product.discountPrice)
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -356,17 +370,38 @@ fun ProductCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
-                    .background(Color(0xFFF8FAFC)),
+                    .height(170.dp)
+                    .background(Color.White),
                 contentAlignment = Alignment.Center
             ) {
                 ProductImage(
                     imageUrl = product.imageUrl,
                     contentDescription = product.name,
-                    modifier = Modifier.fillMaxSize(),
-                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
-                    contentScale = ContentScale.Fit
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(6.dp),
+                    shape = RectangleShape,
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.Center,
+                    backgroundColor = Color.White
                 )
+                if (discountInfo != null) {
+                    Surface(
+                        color = Color(0xFFD32F2F),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp)
+                    ) {
+                        Text(
+                            text = discountInfo.discountBadgeShort,
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
                 if (product.stock <= 0) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.7f),
@@ -405,19 +440,39 @@ fun ProductCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        val displayPrice = product.discountPrice ?: product.price
-                        Text(
-                            text = "₹${displayPrice.toInt()}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = LocalTealPrimary
-                        )
-                        if (product.discountPrice != null) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        if (discountInfo != null) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = discountInfo.formattedOfferPrice,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = LocalTealPrimary
+                                )
+                                Text(
+                                    text = discountInfo.formattedOriginalPrice,
+                                    fontSize = 11.sp,
+                                    color = LocalTextMuted,
+                                    textDecoration = TextDecoration.LineThrough
+                                )
+                            }
                             Text(
-                                text = "₹${product.price.toInt()}",
+                                text = "You Save ${discountInfo.formattedSavings}",
                                 fontSize = 11.sp,
-                                color = LocalTextMuted
+                                fontWeight = FontWeight.SemiBold,
+                                color = LocalSuccess,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                text = ProductDiscountUtils.formatRupees(product.price),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = LocalTealPrimary
                             )
                         }
                     }

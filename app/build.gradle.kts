@@ -16,8 +16,8 @@ android {
         applicationId = "com.aistudio.amalocalmart.oxrkpz"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 7
+        versionName = "1.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "RAZORPAY_KEY_ID", "\"rzp_test_placeholder\"")
@@ -91,6 +91,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.storage)
 

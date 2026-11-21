@@ -55,6 +55,7 @@ class AuthManager(
         private const val KEY_CUSTOMER_ADDRESS = "saved_customer_address"
         private const val KEY_CUSTOMER_PHOTO_URI = "saved_customer_photo_uri"
         private const val KEY_CUSTOMER_VERIFIED = "saved_customer_verified"
+        private const val KEY_CUSTOMER_FIREBASE_UID = "saved_customer_firebase_uid"
 
         // Shop Owner session keys
         private const val KEY_SAVED_SHOP_OWNER_ID = "saved_shop_owner_id"
@@ -69,10 +70,18 @@ class AuthManager(
         private const val KEY_SHOP_OWNER_VILLAGE = "saved_shop_owner_village"
         private const val KEY_SHOP_OWNER_ADDRESS = "saved_shop_owner_address"
         private const val KEY_SHOP_OWNER_PHOTO_URI = "saved_shop_owner_photo_uri"
+        private const val KEY_SHOP_OWNER_FIREBASE_UID = "saved_shop_owner_firebase_uid"
 
         // Last active role
         private const val KEY_LAST_ACTIVE_ROLE = "last_active_role"
+
+        fun isFirebaseUidMatchingSession(savedOwnerUid: String?, currentFirebaseUid: String?): Boolean {
+            if (currentFirebaseUid.isNullOrBlank()) return false
+            return savedOwnerUid.isNullOrBlank() || savedOwnerUid == currentFirebaseUid
+        }
     }
+
+    fun currentFirebaseUid(): String? = FirebasePhoneAuthHelper.currentUid()
 
     private val prefs: SharedPreferences? = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -91,6 +100,7 @@ class AuthManager(
         val address = prefs.getString(KEY_CUSTOMER_ADDRESS, null) ?: "Near Panchayat Samiti Office, Word No 4, Sinapali"
         val photoUri = prefs.getString(KEY_CUSTOMER_PHOTO_URI, null)
         val verified = prefs.getBoolean(KEY_CUSTOMER_VERIFIED, true)
+        val firebaseUid = prefs.getString(KEY_CUSTOMER_FIREBASE_UID, null) ?: ""
 
         return UserEntity(
             id = savedId,
@@ -104,7 +114,8 @@ class AuthManager(
             gp = gp,
             village = village,
             deliveryAddress = address,
-            profilePhotoUri = photoUri
+            profilePhotoUri = photoUri,
+            firebaseUid = firebaseUid
         )
     }
 
@@ -123,6 +134,7 @@ class AuthManager(
         val village = prefs.getString(KEY_SHOP_OWNER_VILLAGE, null) ?: "Sinapali"
         val address = prefs.getString(KEY_SHOP_OWNER_ADDRESS, null) ?: "Sinapali Main Market"
         val photoUri = prefs.getString(KEY_SHOP_OWNER_PHOTO_URI, null)
+        val firebaseUid = prefs.getString(KEY_SHOP_OWNER_FIREBASE_UID, null) ?: ""
 
         return UserEntity(
             id = if (savedId > 0) savedId else 0L,
@@ -137,7 +149,8 @@ class AuthManager(
             gp = gp,
             village = village,
             deliveryAddress = address,
-            profilePhotoUri = photoUri
+            profilePhotoUri = photoUri,
+            firebaseUid = firebaseUid
         )
     }
 
@@ -225,8 +238,9 @@ class AuthManager(
             ?.putString(KEY_SHOP_OWNER_VILLAGE, verifiedUser.village)
             ?.putString(KEY_SHOP_OWNER_ADDRESS, verifiedUser.deliveryAddress)
             ?.putString(KEY_SHOP_OWNER_PHOTO_URI, verifiedUser.profilePhotoUri)
+            ?.putString(KEY_SHOP_OWNER_FIREBASE_UID, verifiedUser.firebaseUid)
             ?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")
-            ?.commit()
+            ?.apply()
     }
 
     fun clearShopOwnerSession() {
@@ -243,8 +257,9 @@ class AuthManager(
             ?.remove(KEY_SHOP_OWNER_VILLAGE)
             ?.remove(KEY_SHOP_OWNER_ADDRESS)
             ?.remove(KEY_SHOP_OWNER_PHOTO_URI)
+            ?.remove(KEY_SHOP_OWNER_FIREBASE_UID)
             ?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")
-            ?.commit()
+            ?.apply()
         activeShopOwner = null
     }
 
@@ -260,7 +275,7 @@ class AuthManager(
             activeShopOwner = owner
             _currentUser.value = owner
             _currentRole.value = UserRole.SHOP_OWNER
-            prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")?.commit()
+            prefs?.edit()?.putString(KEY_LAST_ACTIVE_ROLE, "SHOP_OWNER")?.apply()
             return owner
         }
         return null
@@ -268,6 +283,11 @@ class AuthManager(
 
     fun getActiveShopOwner(): UserEntity? {
         return activeShopOwner ?: restoreShopOwnerSync()
+    }
+
+    fun isShopOwnerFirebaseSessionValid(firebaseUid: String? = currentFirebaseUid()): Boolean {
+        if (!isShopOwnerSessionActive()) return false
+        return isFirebaseUidMatchingSession(getActiveShopOwner()?.firebaseUid, firebaseUid)
     }
 
     private fun persistCustomerSession(user: UserEntity) {
@@ -287,8 +307,9 @@ class AuthManager(
                 ?.putString(KEY_CUSTOMER_ADDRESS, verifiedUser.deliveryAddress)
                 ?.putString(KEY_CUSTOMER_PHOTO_URI, verifiedUser.profilePhotoUri)
                 ?.putBoolean(KEY_CUSTOMER_VERIFIED, true)
+                ?.putString(KEY_CUSTOMER_FIREBASE_UID, verifiedUser.firebaseUid)
                 ?.putString(KEY_LAST_ACTIVE_ROLE, "CUSTOMER")
-                ?.commit()
+                ?.apply()
         }
     }
 
@@ -325,8 +346,10 @@ class AuthManager(
         block: String,
         gp: String,
         village: String,
-        fullAddress: String
+        fullAddress: String,
+        firebaseUid: String = ""
     ): UserEntity {
+        val resolvedUid = firebaseUid.ifBlank { FirebasePhoneAuthHelper.currentUid() ?: "" }
         val existing = repository.getUserByPhoneOrEmail(phone.trim().ifBlank { email.trim() })
         val newUser = if (existing != null) {
             existing.copy(
@@ -338,7 +361,8 @@ class AuthManager(
                 gp = gp,
                 village = village,
                 deliveryAddress = fullAddress,
-                isVerified = true
+                isVerified = true,
+                firebaseUid = resolvedUid.ifBlank { existing.firebaseUid }
             ).also { repository.updateUser(it) }
         } else {
             val entity = UserEntity(
@@ -351,7 +375,8 @@ class AuthManager(
                 block = block,
                 gp = gp,
                 village = village,
-                deliveryAddress = fullAddress
+                deliveryAddress = fullAddress,
+                firebaseUid = resolvedUid
             )
             val id = repository.insertUser(entity)
             entity.copy(id = id)
@@ -523,6 +548,9 @@ class AuthManager(
 
     fun logoutShopOwner() {
         clearShopOwnerSession()
+        if (activeCustomer == null) {
+            FirebasePhoneAuthHelper.signOut()
+        }
         _currentRole.value = UserRole.CUSTOMER
         _currentUser.value = activeCustomer ?: restoreCustomerSync() ?: SeedData.customers[0]
     }
@@ -541,8 +569,12 @@ class AuthManager(
             ?.remove(KEY_CUSTOMER_ADDRESS)
             ?.remove(KEY_CUSTOMER_PHOTO_URI)
             ?.remove(KEY_CUSTOMER_VERIFIED)
-            ?.commit()
+            ?.remove(KEY_CUSTOMER_FIREBASE_UID)
+            ?.apply()
         activeCustomer = null
+        if (activeShopOwner == null) {
+            FirebasePhoneAuthHelper.signOut()
+        }
         if (_currentRole.value == UserRole.CUSTOMER) {
             _currentUser.value = SeedData.customers[0]
         }

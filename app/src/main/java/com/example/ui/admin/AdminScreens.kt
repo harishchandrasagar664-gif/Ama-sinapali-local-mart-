@@ -491,14 +491,24 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
         ) {
             // Multi-Device Cloud Sync Info Banner
             item {
+                val isConn = firebaseReport?.isConnected == true &&
+                    firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.CONNECTED
+                val isPermOrAuthErr = firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.PERMISSION_DENIED ||
+                    firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.VERIFIED_AUTH_REQUIRED
+                val isHardErr = isPermOrAuthErr ||
+                    firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.NOT_CONFIGURED ||
+                    firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.UNREACHABLE ||
+                    firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.PROJECT_NOT_FOUND
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (firebaseReport?.isConnected == true)
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                        else
-                            MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = when {
+                            isConn -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                            isHardErr -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
                     )
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -511,27 +521,34 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
                                 Icon(
                                     Icons.Default.CloudSync,
                                     contentDescription = null,
-                                    tint = if (firebaseReport?.isConnected == true) LocalTealPrimary else MaterialTheme.colorScheme.error
+                                    tint = if (isConn) LocalTealPrimary else MaterialTheme.colorScheme.error
                                 )
                                 Column {
                                     Text("Firebase Firestore Cloud Sync", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    val isConn = firebaseReport?.isConnected == true
-                                    val isReal = firebaseReport?.isRealGoogleCloudProject == true
-                                    val badgeText = when {
-                                        isConn && firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.CONNECTED ->
-                                            "🟢 Real Firebase Project Connected"
-                                        isReal || firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.VERIFIED_AUTH_REQUIRED ->
-                                            "🟢 Real Project Verified (${firebaseReport?.projectId})"
-                                        firebaseReport?.state == FirestoreSyncService.FirebaseConnectionState.NOT_CONFIGURED ->
-                                            "🔴 Not Configured • Enter Project ID"
-                                        else ->
-                                            "🟡 Checking Endpoint (${firebaseReport?.projectId})"
+                                    val badgeText = when (firebaseReport?.state) {
+                                        FirestoreSyncService.FirebaseConnectionState.CONNECTED ->
+                                            if (isConn) "🟢 Real Firebase Project Connected" else "🔴 Connection Check Failed"
+                                        FirestoreSyncService.FirebaseConnectionState.PERMISSION_DENIED,
+                                        FirestoreSyncService.FirebaseConnectionState.VERIFIED_AUTH_REQUIRED ->
+                                            "🔴 Permission Denied / Auth Required (HTTP 403)"
+                                        FirestoreSyncService.FirebaseConnectionState.NOT_CONFIGURED,
+                                        FirestoreSyncService.FirebaseConnectionState.PROJECT_NOT_FOUND ->
+                                            "🔴 Not Configured / Database Not Found"
+                                        FirestoreSyncService.FirebaseConnectionState.UNREACHABLE ->
+                                            "🔴 Firestore Endpoint Unreachable"
+                                        null ->
+                                            "🟡 Checking Endpoint..."
+                                    }
+                                    val badgeColor = when {
+                                        isConn -> LocalSuccess
+                                        isHardErr -> MaterialTheme.colorScheme.error
+                                        else -> LocalTextSecondary
                                     }
                                     Text(
                                         badgeText,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = if (isConn || isReal) LocalSuccess else MaterialTheme.colorScheme.error
+                                        color = badgeColor
                                     )
                                 }
                             }
@@ -547,9 +564,9 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
                         // Project & Status details
                         Text(
                             firebaseReport?.statusMessage
-                                ?: "Real Google Cloud Firestore connection verification active. Zero mock data.",
+                                ?: "Verifying Google Cloud Firestore connectivity...",
                             fontSize = 12.sp,
-                            color = LocalTextSecondary,
+                            color = if (isHardErr) MaterialTheme.colorScheme.onErrorContainer else LocalTextSecondary,
                             lineHeight = 16.sp
                         )
 
@@ -561,9 +578,10 @@ fun AdminOrdersScreen(viewModel: MainViewModel) {
                                 color = LocalTealPrimary
                             )
                             Text(
-                                "Endpoint: firestore.googleapis.com",
+                                if (firebaseReport?.isUserAuthenticated == true) "Firebase Auth: Signed In" else "Firebase Auth: Guest",
                                 fontSize = 10.sp,
-                                color = LocalTextSecondary
+                                fontWeight = FontWeight.Medium,
+                                color = if (firebaseReport?.isUserAuthenticated == true) LocalSuccess else LocalTextSecondary
                             )
                         }
 

@@ -327,4 +327,79 @@ class FirebaseSyncPreparationTest {
         assertEquals("Mobile Customer", result.first.customerName)
         assertEquals(199.0, result.first.finalAmount, 0.01)
     }
+
+    @Test
+    fun testOrderToMap_IncludesCustomerUidAndShopOwnerUid() {
+        val order = OrderEntity(
+            id = 200L,
+            orderNumber = "ORD-SIN-UID-200",
+            userId = 8L,
+            shopId = 3L,
+            totalAmount = 150.0,
+            discountAmount = 0.0,
+            deliveryFee = 20.0,
+            finalAmount = 170.0,
+            status = OrderStatus.PLACED,
+            deliveryType = DeliveryType.HOME_DELIVERY,
+            paymentMethod = PaymentMethod.CASH_ON_DELIVERY,
+            paymentStatus = PaymentStatus.PENDING,
+            deliveryAddress = "Sinapali Block Road",
+            customerPhone = "9437011122",
+            customerName = "Suman Patel",
+            customerUid = "uid_customer_abc",
+            shopOwnerUid = "uid_owner_xyz"
+        )
+        val map = FirestoreSyncService.orderToMap(order, emptyList(), "Sinapali Kirana")
+        assertEquals("uid_customer_abc", map["customerUid"])
+        assertEquals("uid_owner_xyz", map["shopOwnerUid"])
+        assertEquals("shop_3", map["shopDocId"])
+    }
+
+    @Test
+    fun testPermissionDeniedReport_IsNotConnected() {
+        val report = FirestoreSyncService.FirebaseVerificationReport(
+            isConnected = false,
+            state = FirestoreSyncService.FirebaseConnectionState.PERMISSION_DENIED,
+            projectId = FirebaseSyncConfig.FIREBASE_PROJECT_ID,
+            httpStatusCode = 403,
+            statusMessage = "HTTP 403 Permission Denied: Firestore security rules or authentication rejected access.",
+            firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
+            hasGoogleServicesJson = true,
+            isRealGoogleCloudProject = true
+        )
+        assertFalse("HTTP 403 must never set isConnected = true", report.isConnected)
+        assertEquals(FirestoreSyncService.FirebaseConnectionState.PERMISSION_DENIED, report.state)
+        assertEquals(403, report.httpStatusCode)
+    }
+
+    @Test
+    fun testCloudSaveResult_PropagatesAuthAndSyncStatus() {
+        val synced = com.example.data.repository.CloudSaveResult(
+            localId = 101L,
+            cloudSynced = true
+        )
+        assertTrue(synced.cloudSynced)
+        assertFalse(synced.requiresAuth)
+        assertNull(synced.errorMessage)
+
+        val unauthFailure = com.example.data.repository.CloudSaveResult(
+            localId = 102L,
+            cloudSynced = false,
+            errorMessage = "Please sign in with Mobile OTP to save products to Cloud Firestore.",
+            requiresAuth = true
+        )
+        assertFalse(unauthFailure.cloudSynced)
+        assertTrue(unauthFailure.requiresAuth)
+        assertEquals(102L, unauthFailure.localId)
+        assertNotNull(unauthFailure.errorMessage)
+    }
+
+    @Test
+    fun testFirebasePhoneNormalization_IndianNumbers() {
+        assertEquals("+919437012345", com.example.service.FirebasePhoneAuthHelper.normalizeIndianPhoneToE164("9437012345"))
+        assertEquals("+919437012345", com.example.service.FirebasePhoneAuthHelper.normalizeIndianPhoneToE164("+91 94370-12345"))
+        assertEquals("+919437012345", com.example.service.FirebasePhoneAuthHelper.normalizeIndianPhoneToE164("919437012345"))
+        assertEquals("9437012345", com.example.service.FirebasePhoneAuthHelper.extractTenDigitPhone("+919437012345"))
+        assertEquals("9437012345", com.example.service.FirebasePhoneAuthHelper.extractTenDigitPhone("09437012345"))
+    }
 }

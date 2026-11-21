@@ -13,8 +13,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
@@ -26,8 +28,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -45,6 +49,7 @@ import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
+import com.example.util.ProductDiscountUtils
 
 @Composable
 fun SplashScreen(onTimeout: () -> Unit) {
@@ -104,6 +109,8 @@ fun CustomerHomeScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedCat by viewModel.selectedCategory.collectAsState()
     val cartItems by viewModel.cartItems.collectAsState()
+    val isCustomerStoreLoading by viewModel.isCustomerStoreLoading.collectAsState()
+    val storeSyncError by viewModel.storeSyncError.collectAsState()
 
     val approvedBanners = remember(approvedPromotions) {
         approvedPromotions.filter { it.type == PromotionType.PROMOTIONAL_BANNER || it.type == PromotionType.BANNER }
@@ -244,31 +251,120 @@ fun CustomerHomeScreen(
                         )
                     }
                     val isCustomerActive = viewModel.authManager.isCustomerSessionActive() || (user?.isVerified == true && user?.id != null)
-                    TextButton(
-                        onClick = {
-                            viewModel.navigateTo(Screen.CustomerProfile)
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        if (!user?.profilePhotoUri.isNullOrBlank()) {
-                            UserAvatar(
-                                photoUri = user?.profilePhotoUri,
-                                name = user?.name ?: "Customer",
-                                size = 24.dp
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.AccountCircle,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { viewModel.retryCatalogSync() },
+                            enabled = !isCustomerStoreLoading,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("customer_refresh_catalog_btn")
+                        ) {
+                            if (isCustomerStoreLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalTealPrimary
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh live store catalog",
+                                    tint = LocalTealPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.navigateTo(Screen.CustomerProfile)
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            if (!user?.profilePhotoUri.isNullOrBlank()) {
+                                UserAvatar(
+                                    photoUri = user?.profilePhotoUri,
+                                    name = user?.name ?: "Customer",
+                                    size = 24.dp
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.AccountCircle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (isCustomerActive) s.verifiedBadge else s.loginOtp,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            if (isCustomerActive) s.verifiedBadge else s.loginOtp,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                    }
+                }
+            }
+            if (isCustomerStoreLoading) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = LocalTealPrimary
                         )
+                        Text(
+                            "Syncing latest products from local shops...",
+                            fontSize = 11.sp,
+                            color = LocalTextSecondary
+                        )
+                    }
+                }
+            }
+            storeSyncError?.let { errMsg ->
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .testTag("customer_store_sync_error_banner"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errMsg,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    maxLines = 2
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.retryCatalogSync() },
+                                enabled = !isCustomerStoreLoading
+                            ) {
+                                Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
@@ -1078,11 +1174,17 @@ fun CategoriesScreen(viewModel: MainViewModel) {
 fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
     val shops by viewModel.allShops.collectAsState()
     val products by viewModel.allProducts.collectAsState()
+    val currentRole by viewModel.currentRole.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
 
     val shop = shops.find { it.id == shopId }
-    val shopProducts = products.filter { it.shopId == shopId }
+    val shopProducts = remember(products, shopId, currentRole) {
+        products.filter {
+            it.shopId == shopId &&
+                (currentRole != com.example.domain.model.UserRole.CUSTOMER || (it.isApproved && it.isAvailable))
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -1137,13 +1239,72 @@ fun ShopDetailScreen(shopId: Long, viewModel: MainViewModel) {
                             ProductImage(
                                 imageUrl = prod.imageUrl,
                                 contentDescription = prod.name,
-                                modifier = Modifier.size(56.dp),
-                                shape = RoundedCornerShape(8.dp)
+                                modifier = Modifier.size(72.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                contentScale = ContentScale.Fit,
+                                alignment = Alignment.Center,
+                                backgroundColor = Color.White
                             )
                             Spacer(modifier = Modifier.width(12.dp))
+                            val prodDiscountInfo = remember(prod.price, prod.discountPrice) {
+                                ProductDiscountUtils.calculate(prod.price, prod.discountPrice)
+                            }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(prod.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("₹${prod.price.toInt()} per ${prod.unit}", color = LocalTealPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                if (prodDiscountInfo != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            prodDiscountInfo.formattedOfferPrice,
+                                            color = LocalTealPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                        Text(
+                                            prodDiscountInfo.formattedOriginalPrice,
+                                            color = LocalTextMuted,
+                                            fontSize = 11.sp,
+                                            textDecoration = TextDecoration.LineThrough
+                                        )
+                                        Text(
+                                            "per ${prod.unit}",
+                                            color = LocalTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Surface(
+                                            color = Color(0xFFD32F2F),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                prodDiscountInfo.discountBadgeShort,
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        Text(
+                                            "You Save ${prodDiscountInfo.formattedSavings}",
+                                            color = LocalSuccess,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        "${ProductDiscountUtils.formatRupees(prod.price)} per ${prod.unit}",
+                                        color = LocalTealPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
                             }
                             Button(
                                 onClick = { viewModel.addToCart(prod.id, shop.id, 1) },
@@ -1185,37 +1346,121 @@ fun ProductDetailScreen(productId: Long, viewModel: MainViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(16.dp)
             ) {
-                ProductImage(
-                    imageUrl = product.imageUrl,
-                    contentDescription = product.name,
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 260.dp, max = 400.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    contentScale = ContentScale.Fit
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(product.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                Text(product.category, color = LocalTextSecondary, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("₹${(product.discountPrice ?: product.price).toInt()}", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = LocalTealPrimary)
-                    if (product.discountPrice != null) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("₹${product.price.toInt()}", fontSize = 14.sp, color = LocalTextMuted)
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 260.dp, max = 420.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                    ) {
+                        ProductImage(
+                            imageUrl = product.imageUrl,
+                            contentDescription = product.name,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 260.dp, max = 420.dp)
+                                .padding(8.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentScale = ContentScale.Fit,
+                            alignment = Alignment.Center,
+                            backgroundColor = Color.White
+                        )
+                    }
+                    val detailDiscountInfo = remember(product.price, product.discountPrice) {
+                        ProductDiscountUtils.calculate(product.price, product.discountPrice)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(product.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Text(product.category, color = LocalTextSecondary, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    if (detailDiscountInfo != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                detailDiscountInfo.formattedOfferPrice,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = LocalTealPrimary
+                            )
+                            Text(
+                                detailDiscountInfo.formattedOriginalPrice,
+                                fontSize = 16.sp,
+                                color = LocalTextMuted,
+                                textDecoration = TextDecoration.LineThrough
+                            )
+                            Surface(
+                                color = Color(0xFFD32F2F),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    detailDiscountInfo.discountPercentLabel,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "You Save ${detailDiscountInfo.formattedSavings}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LocalSuccess
+                        )
+                    } else {
+                        Text(
+                            ProductDiscountUtils.formatRupees(product.price),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 22.sp,
+                            color = LocalTealPrimary
+                        )
+                    }
+                    if (product.description.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    "ଉତ୍ପାଦର ବିବରଣୀ (Product Description)",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    color = LocalTealDark
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = product.description,
+                                    fontSize = 15.sp,
+                                    lineHeight = 23.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
                     }
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(product.description, fontSize = 14.sp, lineHeight = 20.sp)
-                Spacer(modifier = Modifier.weight(1f))
                 Button(
                     onClick = {
                         viewModel.addToCart(product.id, product.shopId, 1)
                         viewModel.navigateTo(Screen.Cart)
                     },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .height(50.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary)
                 ) {

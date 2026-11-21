@@ -43,11 +43,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.SeedData
+import com.example.service.findActivity
 import com.example.ui.components.ProductImage
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
 import com.example.util.ImageStorageHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ShopOwnerAuthScreen(
@@ -55,11 +59,13 @@ fun ShopOwnerAuthScreen(
     onSuccess: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val activity = remember(context) { context.findActivity() }
     val isOtpSent by viewModel.isShopOwnerOtpSent.collectAsState()
-    val otpCode by viewModel.shopOwnerOtpCode.collectAsState()
     val authError by viewModel.shopOwnerAuthError.collectAsState()
     val isNewRegistration by viewModel.isNewShopOwnerRegistration.collectAsState()
     val isRegistering by viewModel.isRegisteringShop.collectAsState()
+    val isAuthLoading by viewModel.isAuthLoading.collectAsState()
 
     var mobileInput by remember { mutableStateOf("9437012345") }
     var enteredOtp by remember { mutableStateOf("") }
@@ -80,13 +86,17 @@ fun ShopOwnerAuthScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val savedPath = ImageStorageHelper.copyProductUri(context, uri)
-                ?: ImageStorageHelper.copyUri(context, uri, prefix = "shop_photo", subDir = "shops")
-            if (savedPath != null) {
-                regImageUrl = savedPath
-                Toast.makeText(context, "Shop photo selected successfully!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "Could not load image", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                val savedPath = withContext(Dispatchers.IO) {
+                    ImageStorageHelper.copyProductUri(context, uri)
+                        ?: ImageStorageHelper.copyUri(context, uri, prefix = "shop_photo", subDir = "shops")
+                }
+                if (savedPath != null) {
+                    regImageUrl = savedPath
+                    Toast.makeText(context, "Shop photo selected successfully!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Could not load image", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -96,9 +106,13 @@ fun ShopOwnerAuthScreen(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            val savedPath = ImageStorageHelper.saveProductBitmap(context, bitmap)
-            regImageUrl = savedPath
-            Toast.makeText(context, "Shop photo captured!", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                val savedPath = withContext(Dispatchers.IO) {
+                    ImageStorageHelper.saveProductBitmap(context, bitmap)
+                }
+                regImageUrl = savedPath
+                Toast.makeText(context, "Shop photo captured!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -138,7 +152,7 @@ fun ShopOwnerAuthScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (viewModel.authManager.isShopOwnerSessionActive()) {
+        if (viewModel.authManager.isShopOwnerFirebaseSessionValid()) {
             viewModel.authManager.restoreShopOwnerSession()
             onSuccess()
         }
@@ -723,22 +737,37 @@ fun ShopOwnerAuthScreen(
                             if (!isOtpSent) {
                                 Button(
                                     onClick = {
-                                        viewModel.sendShopOwnerOtp(mobileInput)
+                                        viewModel.sendShopOwnerOtp(mobileInput, activity) { success, needsReg, _ ->
+                                            if (success) {
+                                                if (needsReg) {
+                                                    otpVerifiedForNewReg = true
+                                                    regUpiId = "${mobileInput.trim()}@upi"
+                                                } else {
+                                                    onSuccess()
+                                                }
+                                            }
+                                        }
                                     },
-                                    enabled = mobileInput.trim().length >= 10,
+                                    enabled = !isAuthLoading && mobileInput.filter { it.isDigit() }.length >= 10,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .testTag("shop_owner_send_otp_btn"),
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                                 ) {
-                                    Icon(Icons.AutoMirrored.Filled.SendToMobile, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Send Verification OTP", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    if (isAuthLoading) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Sending SMS OTP...", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    } else {
+                                        Icon(Icons.AutoMirrored.Filled.SendToMobile, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Send Verification OTP", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    }
                                 }
 
                                 Text(
-                                    "✨ New merchant? Enter any 10-digit mobile number to verify and register your new shop in seconds!",
+                                    "✨ New merchant? Enter any 10-digit mobile number to verify with Firebase SMS OTP and register your shop!",
                                     fontSize = 11.sp,
                                     color = LocalTextSecondary,
                                     lineHeight = 15.sp
@@ -762,55 +791,24 @@ fun ShopOwnerAuthScreen(
                                 verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 Text(
-                                    "Step 2: Enter 6-digit Verification OTP",
+                                    "Step 2: Enter 6-digit SMS OTP",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 15.sp,
                                     color = Color(0xFFBF360C)
                                 )
 
-                                // Demo OTP banner
-                                otpCode?.let { code ->
-                                    Surface(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        color = Color(0xFFE8F5E9),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(12.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(Icons.Default.VpnKey, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
-                                                Text(
-                                                    "OTP Code: $code",
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 13.sp,
-                                                    color = Color(0xFF1B5E20)
-                                                )
-                                                Text(
-                                                    "Tap below to auto-fill or enter $code (or test code 123456)",
-                                                    fontSize = 11.sp,
-                                                    color = Color(0xFF2E7D32)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                                Text(
+                                    "An SMS verification code has been sent to +91${mobileInput.filter { it.isDigit() }.takeLast(10)} via Firebase Phone Authentication.",
+                                    fontSize = 12.sp,
+                                    color = LocalTextSecondary
+                                )
 
                                 OutlinedTextField(
                                     value = enteredOtp,
-                                    onValueChange = { enteredOtp = it.take(6) },
-                                    label = { Text("6-digit Verification OTP") },
+                                    onValueChange = { enteredOtp = it.filter { ch -> ch.isDigit() }.take(6) },
+                                    label = { Text("6-digit SMS OTP") },
                                     leadingIcon = {
                                         Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFE65100))
-                                    },
-                                    trailingIcon = {
-                                        if (enteredOtp.isEmpty() && otpCode != null) {
-                                            TextButton(onClick = { enteredOtp = otpCode ?: "123456" }) {
-                                                Text("Fill OTP", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
-                                            }
-                                        }
                                     },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     modifier = Modifier
@@ -832,20 +830,26 @@ fun ShopOwnerAuthScreen(
                                             }
                                         }
                                     },
-                                    enabled = enteredOtp.length >= 4,
+                                    enabled = !isAuthLoading && enteredOtp.length == 6,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .testTag("shop_owner_verify_otp_btn"),
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                                 ) {
-                                    Icon(Icons.Default.VerifiedUser, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        if (isNewRegistration) "Verify OTP & Continue to Shop Details" else "Verify & Access Shop Dashboard",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp
-                                    )
+                                    if (isAuthLoading) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Verifying OTP...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    } else {
+                                        Icon(Icons.Default.VerifiedUser, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            if (isNewRegistration) "Verify OTP & Continue to Shop Details" else "Verify & Access Shop Dashboard",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    }
                                 }
 
                                 Row(
@@ -855,8 +859,18 @@ fun ShopOwnerAuthScreen(
                                 ) {
                                     TextButton(
                                         onClick = {
-                                            viewModel.sendShopOwnerOtp(mobileInput)
-                                        }
+                                            viewModel.sendShopOwnerOtp(mobileInput, activity) { success, needsReg, _ ->
+                                                if (success) {
+                                                    if (needsReg) {
+                                                        otpVerifiedForNewReg = true
+                                                        regUpiId = "${mobileInput.trim()}@upi"
+                                                    } else {
+                                                        onSuccess()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isAuthLoading
                                     ) {
                                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
@@ -868,7 +882,8 @@ fun ShopOwnerAuthScreen(
                                             viewModel.resetShopOwnerOtpState()
                                             enteredOtp = ""
                                             otpVerifiedForNewReg = false
-                                        }
+                                        },
+                                        enabled = !isAuthLoading
                                     ) {
                                         Text("Change Number", fontSize = 12.sp, color = LocalTextSecondary)
                                     }

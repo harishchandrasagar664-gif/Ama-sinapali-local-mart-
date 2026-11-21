@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -34,23 +35,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.domain.model.AppLanguage
+import com.example.service.findActivity
 import com.example.ui.locale.AppStrings
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
 import androidx.activity.compose.BackHandler
-import kotlinx.coroutines.launch
 
 @Composable
 fun CustomerAuthScreen(
     viewModel: MainViewModel,
     onSuccess: () -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     val isOtpSent by viewModel.isOtpSent.collectAsState()
     val isOtpVerified by viewModel.isOtpVerified.collectAsState()
-    val otpCode by viewModel.otpCode.collectAsState()
     val authError by viewModel.authErrorMessage.collectAsState()
+    val isAuthLoading by viewModel.isAuthLoading.collectAsState()
     val appLanguage by viewModel.appLanguage.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
     val s = remember(appLanguage) { AppStrings.get(appLanguage) }
@@ -62,10 +64,9 @@ fun CustomerAuthScreen(
     }
 
     var authMode by remember { mutableStateOf(AuthMode.LOGIN) }
-    var useEmail by remember { mutableStateOf(false) }
 
     var mobileInput by remember { mutableStateOf("8895011223") }
-    var emailInput by remember { mutableStateOf("priyanka@sinapali.com") }
+    var emailInput by remember { mutableStateOf("") }
     var otpInput by remember { mutableStateOf("") }
 
     // First-time Registration Address fields
@@ -382,108 +383,74 @@ fun CustomerAuthScreen(
                 }
             }
 
-            // Channel Selector: Mobile vs Email
-            item {
-                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            "Choose Verification Method:",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            color = LocalTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            FilterChip(
-                                selected = !useEmail,
-                                onClick = {
-                                    useEmail = false
-                                    viewModel.resetCustomerOtpState()
-                                    otpInput = ""
-                                },
-                                label = { Text(s.mobileOtpMethod) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("chip_mobile_otp")
-                            )
-                            FilterChip(
-                                selected = useEmail,
-                                onClick = {
-                                    useEmail = true
-                                    viewModel.resetCustomerOtpState()
-                                    otpInput = ""
-                                },
-                                label = { Text(s.emailOtpMethod) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("chip_email_otp")
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Input Target (Phone or Email)
+            // Firebase Phone OTP Verification Info
             item {
                 Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        if (!useEmail) {
-                            OutlinedTextField(
-                                value = mobileInput,
-                                onValueChange = { mobileInput = it.filter { ch -> ch.isDigit() }.take(10) },
-                                label = { Text(s.mobileNumberField) },
-                                leadingIcon = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(start = 12.dp, end = 6.dp)
-                                    ) {
-                                        Text("+91", fontWeight = FontWeight.Bold, color = LocalTealPrimary)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Divider(
-                                            modifier = Modifier
-                                                .height(20.dp)
-                                                .width(1.dp)
-                                        )
-                                    }
-                                },
-                                placeholder = { Text("e.g. 9437012345") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                singleLine = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("input_mobile_number"),
-                                enabled = !isOtpVerified
-                            )
-                        } else {
-                            OutlinedTextField(
-                                value = emailInput,
-                                onValueChange = { emailInput = it.trim() },
-                                label = { Text(s.emailAddressField) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Email, contentDescription = null, tint = LocalTealPrimary)
-                                },
-                                placeholder = { Text("e.g. customer@sinapali.com") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                singleLine = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("input_email_address"),
-                                enabled = !isOtpVerified
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = LocalTealPrimary, modifier = Modifier.size(20.dp))
+                            Text(
+                                "Mobile Number + Firebase SMS OTP",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = LocalTealDark
                             )
                         }
 
+                        OutlinedTextField(
+                            value = mobileInput,
+                            onValueChange = { mobileInput = it.filter { ch -> ch.isDigit() }.take(10) },
+                            label = { Text(s.mobileNumberField) },
+                            leadingIcon = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(start = 12.dp, end = 6.dp)
+                                ) {
+                                    Text("+91", fontWeight = FontWeight.Bold, color = LocalTealPrimary)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    HorizontalDivider(
+                                        modifier = Modifier
+                                            .height(20.dp)
+                                            .width(1.dp)
+                                    )
+                                }
+                            },
+                            placeholder = { Text("e.g. 9437012345") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("input_mobile_number"),
+                            enabled = !isOtpVerified && !isAuthLoading
+                        )
+
                         Button(
                             onClick = {
-                                val target = if (!useEmail) mobileInput else emailInput
-                                if (target.isNotBlank()) {
-                                    val code = viewModel.sendCustomerOtp(target, useEmail)
-                                    otpInput = code // Prefill for smooth testing/convenience
+                                if (mobileInput.length >= 10) {
+                                    viewModel.sendCustomerOtp(mobileInput, activity) { existing ->
+                                        if (authMode == AuthMode.LOGIN && existing != null) {
+                                            viewModel.loginCustomerWithVerifiedOtp(existing) {
+                                                onSuccess()
+                                            }
+                                        } else {
+                                            authMode = AuthMode.REGISTER
+                                            if (existing != null) {
+                                                fullName = existing.name
+                                                emailInput = existing.email
+                                                district = existing.district
+                                                block = existing.block
+                                                gp = existing.gp
+                                                village = existing.village
+                                                fullAddress = existing.deliveryAddress
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -492,11 +459,26 @@ fun CustomerAuthScreen(
                                 .testTag("btn_send_otp"),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = LocalTealPrimary),
-                            enabled = !isOtpVerified && ((!useEmail && mobileInput.length >= 10) || (useEmail && emailInput.contains("@")))
+                            enabled = !isOtpVerified && !isAuthLoading && mobileInput.length >= 10
                         ) {
-                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isOtpSent) s.resendOtpBtn else s.sendOtpBtn, fontWeight = FontWeight.Bold)
+                            if (isAuthLoading && !isOtpSent) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sending SMS OTP...", fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(if (isOtpSent) s.resendOtpBtn else s.sendOtpBtn, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (!isOtpSent && authError != null) {
+                            Text(
+                                text = authError ?: "",
+                                color = LocalError,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -519,44 +501,17 @@ fun CustomerAuthScreen(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )
-                            Surface(
-                                color = LocalAmberSecondary.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            "Verification Code Sent:",
-                                            fontSize = 11.sp,
-                                            color = LocalTextSecondary
-                                        )
-                                        Text(
-                                            "${otpCode ?: "123456"}",
-                                            fontSize = 20.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = LocalTealDark,
-                                            letterSpacing = 2.sp
-                                        )
-                                    }
-                                    FilledTonalButton(
-                                        onClick = { otpInput = otpCode ?: "123456" },
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text("Auto-fill", fontSize = 12.sp)
-                                    }
-                                }
-                            }
+                            Text(
+                                "Enter the 6-digit SMS verification code sent by Firebase to +91$mobileInput.",
+                                fontSize = 12.sp,
+                                color = LocalTextSecondary
+                            )
 
                             OutlinedTextField(
                                 value = otpInput,
-                                onValueChange = { if (it.length <= 6) otpInput = it },
+                                onValueChange = { otpInput = it.filter { ch -> ch.isDigit() }.take(6) },
                                 label = { Text(s.enterOtpTitle) },
-                                placeholder = { Text("123456") },
+                                placeholder = { Text("6-digit SMS OTP") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
                                 modifier = Modifier
@@ -575,21 +530,17 @@ fun CustomerAuthScreen(
 
                             Button(
                                 onClick = {
-                                    val valid = viewModel.verifyCustomerOtp(otpInput)
-                                    if (valid) {
-                                        val target = if (!useEmail) mobileInput else emailInput
-                                        coroutineScope.launch {
-                                            val existing = viewModel.checkCustomerExists(target)
+                                    viewModel.verifyCustomerOtp(otpInput) { valid, existing, _ ->
+                                        if (valid) {
                                             if (authMode == AuthMode.LOGIN && existing != null) {
-                                                // Existing customer logs in directly!
                                                 viewModel.loginCustomerWithVerifiedOtp(existing) {
                                                     onSuccess()
                                                 }
                                             } else {
-                                                // Switch to First-time Registration to collect Odisha address!
                                                 authMode = AuthMode.REGISTER
                                                 if (existing != null) {
                                                     fullName = existing.name
+                                                    emailInput = existing.email
                                                     district = existing.district
                                                     block = existing.block
                                                     gp = existing.gp
@@ -600,6 +551,7 @@ fun CustomerAuthScreen(
                                         }
                                     }
                                 },
+                                enabled = !isAuthLoading && otpInput.length == 6,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(48.dp)
@@ -607,9 +559,15 @@ fun CustomerAuthScreen(
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = LocalSuccess)
                             ) {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(s.verifyOtpBtn, fontWeight = FontWeight.Bold)
+                                if (isAuthLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Verifying...", fontWeight = FontWeight.Bold)
+                                } else {
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(s.verifyOtpBtn, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -668,6 +626,18 @@ fun CustomerAuthScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("input_customer_name")
+                            )
+
+                            OutlinedTextField(
+                                value = emailInput,
+                                onValueChange = { emailInput = it.trim() },
+                                label = { Text("Email Address (Optional)") },
+                                placeholder = { Text("e.g. customer@sinapali.com") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("input_email_address")
                             )
 
                             // Odisha District Selector

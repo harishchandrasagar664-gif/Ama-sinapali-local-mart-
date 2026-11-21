@@ -1,0 +1,272 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Shared helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Admin role is granted only via console/server-managed /admins/{uid} document
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Verifies the caller owns the parent shop document
+    function ownsParentShop(shopDocId) {
+      return isValidId(shopDocId) &&
+             exists(/databases/$(database)/documents/shops/$(shopDocId)) &&
+             get(/databases/$(database)/documents/shops/$(shopDocId)).data.ownerUid == request.auth.uid;
+    }
+
+    // 3. Entity validators
+    function isValidUser(data, uid) {
+      return data.uid is string &&
+             data.uid == uid &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 20 &&
+             data.email is string && data.email.size() <= 160 &&
+             data.role in ['CUSTOMER', 'SHOP_OWNER'] &&
+             (!('shopId' in data) || data.shopId == null || data.shopId is int) &&
+             data.isVerified is bool &&
+             data.deliveryAddress is string && data.deliveryAddress.size() <= 300 &&
+             data.district is string && data.district.size() <= 80 &&
+             data.block is string && data.block.size() <= 80 &&
+             data.updatedAt is int && data.updatedAt > 0;
+    }
+
+    function isValidShop(data) {
+      return data.id is int && data.id > 0 &&
+             data.ownerId is int &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 100 &&
+             data.address is string && data.address.size() >= 2 && data.address.size() <= 300 &&
+             data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 20 &&
+             data.upiId is string && data.upiId.size() <= 100 &&
+             data.rating is number && data.rating >= 0 && data.rating <= 5 &&
+             data.reviewCount is int && data.reviewCount >= 0 &&
+             data.isOpen is bool &&
+             data.deliveryAvailable is bool &&
+             data.minOrderAmount is number && data.minOrderAmount >= 0 &&
+             data.estimatedDeliveryMins is int && data.estimatedDeliveryMins >= 0 && data.estimatedDeliveryMins <= 1440 &&
+             data.isApproved is bool &&
+             data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 400000 &&
+             data.ownerName is string && data.ownerName.size() <= 120 &&
+             data.updatedAt is int && data.updatedAt > 0;
+    }
+
+    function isValidProduct(data) {
+      return data.id is int && data.id > 0 &&
+             data.shopId is int && data.shopId > 0 &&
+             data.shopDocId is string && data.shopDocId == ('shop_' + string(data.shopId)) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 100 &&
+             data.description is string && data.description.size() <= 4000 &&
+             data.price is number && data.price > 0 &&
+             (!('discountPrice' in data) || data.discountPrice == null || (data.discountPrice is number && data.discountPrice >= 0 && data.discountPrice <= data.price)) &&
+             data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 50 &&
+             data.stock is int && data.stock >= 0 &&
+             data.isAvailable is bool &&
+             data.isApproved is bool &&
+             data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 400000 &&
+             data.updatedAt is int && data.updatedAt > 0;
+    }
+
+    function isValidOrder(data) {
+      return data.orderNumber is string && data.orderNumber.size() >= 3 && data.orderNumber.size() <= 80 &&
+             data.customerUid is string && data.customerUid.size() >= 1 && data.customerUid.size() <= 128 &&
+             data.shopId is int && data.shopId > 0 &&
+             data.shopDocId is string && data.shopDocId == ('shop_' + string(data.shopId)) &&
+             data.shopOwnerUid is string && data.shopOwnerUid.size() <= 128 &&
+             data.finalAmount is number && data.finalAmount >= 0 &&
+             data.status in ['PLACED', 'ACCEPTED', 'PACKED', 'READY_FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'];
+    }
+
+    function isValidPromotion(data) {
+      return data.id is int && data.id > 0 &&
+             data.shopId is int && data.shopId > 0 &&
+             data.shopDocId is string && data.shopDocId == ('shop_' + string(data.shopId)) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+             data.status in ['PENDING_APPROVAL', 'APPROVED', 'ACTIVE', 'REJECTED', 'EXPIRED'];
+    }
+
+    function isValidReview(data) {
+      return data.id is int && data.id > 0 &&
+             data.shopId is int && data.shopId > 0 &&
+             data.userUid is string && data.userUid.size() >= 1 && data.userUid.size() <= 128 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() <= 1000;
+    }
+
+    function isValidComplaint(data) {
+      return data.id is int && data.id > 0 &&
+             data.userUid is string && data.userUid.size() >= 1 && data.userUid.size() <= 128 &&
+             data.issueType is string && data.issueType.size() >= 1 && data.issueType.size() <= 100 &&
+             data.description is string && data.description.size() >= 1 && data.description.size() <= 2000 &&
+             data.status in ['OPEN', 'IN_REVIEW', 'RESOLVED', 'CLOSED'];
+    }
+
+    // 4. Admins (read-own only; write via Firebase Console/Admin SDK only)
+    match /admins/{uid} {
+      allow get: if isSignedIn() && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+
+    // 5. User profiles (PII restricted to own UID or Admin)
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(uid) && request.auth.uid == uid && isValidUser(incoming(), uid);
+      allow update: if isSignedIn() && isValidId(uid) && isValidUser(incoming(), uid) &&
+                       (isAdmin() || (request.auth.uid == uid && incoming().uid == existing().uid && incoming().role == existing().role));
+      allow delete: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+    }
+
+    // 6. Shops (Public read only for approved shops; owner/admin can read own unapproved shop)
+    match /shops/{shopDocId} {
+      allow get, list: if existing().isApproved == true ||
+                         (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+                         isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(shopDocId) &&
+                       isValidShop(incoming()) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       shopDocId == ('shop_' + string(incoming().id));
+
+      allow update: if isSignedIn() &&
+                       isValidId(shopDocId) &&
+                       isValidShop(incoming()) &&
+                       (isAdmin() || (
+                         existing().ownerUid == request.auth.uid &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().id == existing().id &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'category', 'address', 'phone', 'upiId',
+                           'isOpen', 'deliveryAvailable', 'minOrderAmount',
+                           'estimatedDeliveryMins', 'imageUrl', 'ownerName', 'updatedAt'
+                         ])
+                       ));
+
+      allow delete: if isSignedIn() && isValidId(shopDocId) &&
+                       (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // 7. Products (Public read ONLY for approved + available products; writes strictly tied to parent shop ownerUid)
+    match /products/{productDocId} {
+      allow get, list: if (existing().isApproved == true && existing().isAvailable == true) ||
+                         (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+                         isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(productDocId) &&
+                       isValidProduct(incoming()) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       productDocId == ('prod_' + string(incoming().id)) &&
+                       (ownsParentShop(incoming().shopDocId) || isAdmin());
+
+      allow update: if isSignedIn() &&
+                       isValidId(productDocId) &&
+                       isValidProduct(incoming()) &&
+                       (isAdmin() || (
+                         existing().ownerUid == request.auth.uid &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().id == existing().id &&
+                         incoming().shopId == existing().shopId &&
+                         incoming().shopDocId == existing().shopDocId &&
+                         ownsParentShop(existing().shopDocId) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'category', 'description', 'price', 'discountPrice',
+                           'unit', 'stock', 'isAvailable', 'imageUrl', 'updatedAt'
+                         ])
+                       ));
+
+      allow delete: if isSignedIn() &&
+                       isValidId(productDocId) &&
+                       (isAdmin() || (
+                         existing().ownerUid == request.auth.uid &&
+                         ownsParentShop(existing().shopDocId)
+                       ));
+    }
+
+    // 8. Orders (Customer, target shop owner, and Admin only; only Admin can set DELIVERED)
+    match /orders/{orderDocId} {
+      allow get, list: if isSignedIn() &&
+                         (existing().customerUid == request.auth.uid ||
+                          existing().shopOwnerUid == request.auth.uid ||
+                          isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(orderDocId) &&
+                       isValidOrder(incoming()) &&
+                       incoming().customerUid == request.auth.uid &&
+                       exists(/databases/$(database)/documents/shops/$(incoming().shopDocId));
+
+      allow update: if isSignedIn() &&
+                       isValidId(orderDocId) &&
+                       isValidOrder(incoming()) &&
+                       (isAdmin() || (
+                         existing().shopOwnerUid == request.auth.uid &&
+                         incoming().customerUid == existing().customerUid &&
+                         incoming().shopOwnerUid == existing().shopOwnerUid &&
+                         incoming().orderNumber == existing().orderNumber &&
+                         existing().status != 'DELIVERED' &&
+                         incoming().status != 'DELIVERED' &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'syncedAt'])
+                       ));
+
+      allow delete: if isAdmin();
+    }
+
+    // 9. Promotions
+    match /promotions/{promoDocId} {
+      allow get, list: if existing().status in ['APPROVED', 'ACTIVE'] ||
+                         (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+                         isAdmin();
+      allow create: if isSignedIn() && isValidId(promoDocId) && isValidPromotion(incoming()) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       ownsParentShop(incoming().shopDocId);
+      allow update: if isSignedIn() && isValidId(promoDocId) && isValidPromotion(incoming()) &&
+                       (isAdmin() || (existing().ownerUid == request.auth.uid && incoming().ownerUid == existing().ownerUid));
+      allow delete: if isSignedIn() && isValidId(promoDocId) && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // 10. Reviews
+    match /reviews/{reviewDocId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() && isValidId(reviewDocId) && isValidReview(incoming()) &&
+                       incoming().userUid == request.auth.uid;
+      allow update, delete: if isSignedIn() && isValidId(reviewDocId) &&
+                               (existing().userUid == request.auth.uid || isAdmin());
+    }
+
+    // 11. Complaints
+    match /complaints/{complaintDocId} {
+      allow get, list: if isSignedIn() && (existing().userUid == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(complaintDocId) && isValidComplaint(incoming()) &&
+                       incoming().userUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(complaintDocId) && isValidComplaint(incoming()) && isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}

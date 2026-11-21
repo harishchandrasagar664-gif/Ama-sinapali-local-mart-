@@ -6,6 +6,7 @@ import com.example.data.local.entities.*
 import com.example.domain.model.*
 import com.example.data.firebase.FirestoreSyncService
 import com.example.data.firebase.FirebaseSyncConfig
+import com.example.service.FirebasePhoneAuthHelper
 import com.example.service.OrderSyncService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+data class CloudSaveResult<out T>(
+    val localId: T,
+    val cloudSynced: Boolean,
+    val errorMessage: String? = null,
+    val requiresAuth: Boolean = false
+)
 
 class MartRepository(private val dao: MartDao) {
 
@@ -106,26 +114,69 @@ class MartRepository(private val dao: MartDao) {
 
     fun getActiveShops(): Flow<List<ShopEntity>> = dao.getActiveShops()
     fun getAllShops(): Flow<List<ShopEntity>> = dao.getAllShops()
+    suspend fun getAllShopsSync(): List<ShopEntity> = dao.getAllShopsSync()
     fun getShopById(shopId: Long): Flow<ShopEntity?> = dao.getShopById(shopId)
     suspend fun getShopByIdSync(shopId: Long): ShopEntity? = dao.getShopByIdSync(shopId)
     suspend fun getShopByOwnerId(ownerId: Long): ShopEntity? = dao.getShopByOwnerId(ownerId)
     fun getShopFlowByOwnerId(ownerId: Long): Flow<ShopEntity?> = dao.getShopFlowByOwnerId(ownerId)
-    suspend fun createShop(shop: ShopEntity): Long = withContext(Dispatchers.IO) {
-        val assignedId = if (shop.id > 0L) shop.id else (System.currentTimeMillis() % 100000000L + 1000L)
-        val toInsert = shop.copy(id = assignedId)
+    suspend fun createShop(
+        shop: ShopEntity,
+        owner: UserEntity? = null
+    ): CloudSaveResult<Long> = withContext(Dispatchers.IO) {
+        val isNewRecord = shop.id <= 0L
+        val assignedId = if (shop.id > 0L) shop.id else System.currentTimeMillis()
+        val resolvedOwnerUid = shop.ownerUid.ifBlank {
+            owner?.firebaseUid?.ifBlank { null } ?: FirebasePhoneAuthHelper.currentUid() ?: ""
+        }
+        val toInsert = shop.copy(id = assignedId, ownerUid = resolvedOwnerUid)
         val id = dao.insertShop(toInsert)
         val finalId = if (id > 0L) id else assignedId
         val persisted = toInsert.copy(id = finalId)
-        try {
-            FirestoreSyncService.pushShopToFirestore(persisted)
-        } catch (_: Throwable) { }
-        finalId
+        val syncResult = FirestoreSyncService.pushShopToFirestoreWithResult(persisted, owner, isNew = isNewRecord)
+        when (syncResult) {
+            is FirestoreSyncService.CloudSyncResult.Success ->
+                CloudSaveResult(localId = finalId, cloudSynced = true)
+            is FirestoreSyncService.CloudSyncResult.Failure -> {
+                android.util.Log.e(
+                    "MartRepository",
+                    "createShop cloud write failed (shopId=$finalId, ownerUid=$resolvedOwnerUid, code=${syncResult.errorCode}): ${syncResult.userMessage}"
+                )
+                CloudSaveResult(
+                    localId = finalId,
+                    cloudSynced = false,
+                    errorMessage = syncResult.userMessage,
+                    requiresAuth = syncResult.isAuthOrPermissionError
+                )
+            }
+        }
     }
-    suspend fun updateShop(shop: ShopEntity) = withContext(Dispatchers.IO) {
-        dao.updateShop(shop)
-        try {
-            FirestoreSyncService.pushShopToFirestore(shop)
-        } catch (_: Throwable) { }
+
+    suspend fun updateShop(
+        shop: ShopEntity,
+        owner: UserEntity? = null
+    ): CloudSaveResult<Unit> = withContext(Dispatchers.IO) {
+        val resolvedOwnerUid = shop.ownerUid.ifBlank {
+            owner?.firebaseUid?.ifBlank { null } ?: FirebasePhoneAuthHelper.currentUid() ?: ""
+        }
+        val updated = if (resolvedOwnerUid != shop.ownerUid) shop.copy(ownerUid = resolvedOwnerUid) else shop
+        dao.updateShop(updated)
+        val syncResult = FirestoreSyncService.pushShopToFirestoreWithResult(updated, owner, isNew = false)
+        when (syncResult) {
+            is FirestoreSyncService.CloudSyncResult.Success ->
+                CloudSaveResult(localId = Unit, cloudSynced = true)
+            is FirestoreSyncService.CloudSyncResult.Failure -> {
+                android.util.Log.e(
+                    "MartRepository",
+                    "updateShop cloud write failed (shopId=${updated.id}, ownerUid=$resolvedOwnerUid, code=${syncResult.errorCode}): ${syncResult.userMessage}"
+                )
+                CloudSaveResult(
+                    localId = Unit,
+                    cloudSynced = false,
+                    errorMessage = syncResult.userMessage,
+                    requiresAuth = syncResult.isAuthOrPermissionError
+                )
+            }
+        }
     }
 
     suspend fun insertOrUpdateShopFromCloud(shop: ShopEntity) = withContext(Dispatchers.IO) {
@@ -134,35 +185,85 @@ class MartRepository(private val dao: MartDao) {
 
     fun getActiveProducts(): Flow<List<ProductEntity>> = dao.getActiveProducts()
     fun getAllProducts(): Flow<List<ProductEntity>> = dao.getAllProducts()
+    suspend fun getAllProductsSync(): List<ProductEntity> = dao.getAllProductsSync()
     fun getProductsByShop(shopId: Long): Flow<List<ProductEntity>> = dao.getProductsByShop(shopId)
     fun getProductsByCategory(category: String): Flow<List<ProductEntity>> = dao.getProductsByCategory(category)
     fun getProductById(productId: Long): Flow<ProductEntity?> = dao.getProductById(productId)
     suspend fun getProductByIdSync(productId: Long): ProductEntity? = dao.getProductByIdSync(productId)
 
-    suspend fun addProduct(product: ProductEntity): Long = withContext(Dispatchers.IO) {
-        val assignedId = if (product.id > 0L) product.id else (System.currentTimeMillis() % 100000000L + 10000L)
-        val toInsert = product.copy(id = assignedId)
+    suspend fun addProduct(product: ProductEntity): CloudSaveResult<Long> = withContext(Dispatchers.IO) {
+        val isNewRecord = product.id <= 0L
+        val assignedId = if (product.id > 0L) product.id else System.currentTimeMillis()
+        val resolvedOwnerUid = product.ownerUid.ifBlank {
+            FirebasePhoneAuthHelper.currentUid() ?: ""
+        }
+        val toInsert = product.copy(id = assignedId, ownerUid = resolvedOwnerUid)
         val id = dao.insertProduct(toInsert)
         val finalId = if (id > 0L) id else assignedId
         val persisted = toInsert.copy(id = finalId)
-        try {
-            FirestoreSyncService.pushProductToFirestore(persisted)
-        } catch (_: Throwable) { }
-        finalId
+        val syncResult = FirestoreSyncService.pushProductToFirestoreWithResult(persisted, isNew = isNewRecord)
+        when (syncResult) {
+            is FirestoreSyncService.CloudSyncResult.Success ->
+                CloudSaveResult(localId = finalId, cloudSynced = true)
+            is FirestoreSyncService.CloudSyncResult.Failure -> {
+                android.util.Log.e(
+                    "MartRepository",
+                    "addProduct cloud write failed (productId=$finalId, shopId=${persisted.shopId}, ownerUid=$resolvedOwnerUid, code=${syncResult.errorCode}): ${syncResult.userMessage}"
+                )
+                CloudSaveResult(
+                    localId = finalId,
+                    cloudSynced = false,
+                    errorMessage = syncResult.userMessage,
+                    requiresAuth = syncResult.isAuthOrPermissionError
+                )
+            }
+        }
     }
 
-    suspend fun updateProduct(product: ProductEntity) = withContext(Dispatchers.IO) {
-        dao.updateProduct(product)
-        try {
-            FirestoreSyncService.pushProductToFirestore(product)
-        } catch (_: Throwable) { }
+    suspend fun updateProduct(product: ProductEntity): CloudSaveResult<Unit> = withContext(Dispatchers.IO) {
+        val resolvedOwnerUid = product.ownerUid.ifBlank {
+            FirebasePhoneAuthHelper.currentUid() ?: ""
+        }
+        val updated = if (resolvedOwnerUid != product.ownerUid) product.copy(ownerUid = resolvedOwnerUid) else product
+        dao.updateProduct(updated)
+        val syncResult = FirestoreSyncService.pushProductToFirestoreWithResult(updated, isNew = false)
+        when (syncResult) {
+            is FirestoreSyncService.CloudSyncResult.Success ->
+                CloudSaveResult(localId = Unit, cloudSynced = true)
+            is FirestoreSyncService.CloudSyncResult.Failure -> {
+                android.util.Log.e(
+                    "MartRepository",
+                    "updateProduct cloud write failed (productId=${updated.id}, shopId=${updated.shopId}, ownerUid=$resolvedOwnerUid, code=${syncResult.errorCode}): ${syncResult.userMessage}"
+                )
+                CloudSaveResult(
+                    localId = Unit,
+                    cloudSynced = false,
+                    errorMessage = syncResult.userMessage,
+                    requiresAuth = syncResult.isAuthOrPermissionError
+                )
+            }
+        }
     }
 
-    suspend fun deleteProduct(product: ProductEntity) = withContext(Dispatchers.IO) {
+    suspend fun deleteProduct(product: ProductEntity): CloudSaveResult<Unit> = withContext(Dispatchers.IO) {
         dao.deleteProduct(product)
-        try {
-            FirestoreSyncService.deleteProductFromFirestore(product)
-        } catch (_: Throwable) { }
+        val syncResult = FirestoreSyncService.deleteProductFromFirestoreWithResult(product)
+        when (syncResult) {
+            is FirestoreSyncService.CloudSyncResult.Success ->
+                CloudSaveResult(localId = Unit, cloudSynced = true)
+            is FirestoreSyncService.CloudSyncResult.Failure -> {
+                android.util.Log.e(
+                    "MartRepository",
+                    "deleteProduct cloud delete failed (productId=${product.id}, shopId=${product.shopId}, code=${syncResult.errorCode}): ${syncResult.userMessage}"
+                )
+                CloudSaveResult(
+                    localId = Unit,
+                    cloudSynced = false,
+                    errorMessage = syncResult.userMessage,
+                    requiresAuth = syncResult.isAuthOrPermissionError
+                )
+            }
+        }
     }
 
     suspend fun insertOrUpdateProductFromCloud(product: ProductEntity) = withContext(Dispatchers.IO) {
@@ -225,6 +326,7 @@ class MartRepository(private val dao: MartDao) {
         val finalAmount = (subtotal - discountAmount + deliveryFee).coerceAtLeast(0.0)
         val orderNumber = "ORD-SIN-${System.currentTimeMillis()}-${(100..999).random()}"
 
+        val resolvedCustomerUid = customer.firebaseUid.ifBlank { FirebasePhoneAuthHelper.currentUid() ?: "" }
         val order = OrderEntity(
             orderNumber = orderNumber,
             userId = customer.id,
@@ -240,7 +342,9 @@ class MartRepository(private val dao: MartDao) {
             deliveryAddress = deliveryAddress,
             customerPhone = customer.phone,
             customerName = customer.name,
-            placedAt = System.currentTimeMillis()
+            placedAt = System.currentTimeMillis(),
+            customerUid = resolvedCustomerUid,
+            shopOwnerUid = shop.ownerUid
         )
         val orderId = dao.insertOrder(order)
 
@@ -257,11 +361,11 @@ class MartRepository(private val dao: MartDao) {
         dao.insertOrderItems(orderItems)
         dao.clearCart(customer.id)
 
-        // Guaranteed immediate push to Firebase Firestore so Admin sees it immediately from any device
-        try {
-            FirestoreSyncService.pushOrderToFirestore(order.copy(id = orderId), orderItems, shop.name)
-        } catch (e: Throwable) {
-            android.util.Log.w("MartRepository", "Notice: Firestore immediate push: ${e.message}")
+        // Guaranteed immediate push to Firebase Firestore so Shop Owner & Admin see it immediately
+        when (val pushResult = FirestoreSyncService.pushOrderToFirestoreWithResult(order.copy(id = orderId), orderItems, shop.name)) {
+            is FirestoreSyncService.CloudSyncResult.Failure ->
+                android.util.Log.w("MartRepository", "Notice: Firestore order push: ${pushResult.userMessage}")
+            is FirestoreSyncService.CloudSyncResult.Success -> Unit
         }
 
         // Notification for the correct Shop Owner based on ordered product/shop
@@ -569,12 +673,22 @@ class MartRepository(private val dao: MartDao) {
      * and merges them into the local Room database, and backfills local shops/products to Firestore.
      */
     suspend fun syncShopsAndProductsFromCloud(): Pair<Int, Int> = withContext(Dispatchers.IO) {
-        var res = Pair(0, 0)
-        try {
-            res = FirestoreSyncService.performShopAndProductCloudSync(dao)
-        } catch (e: Throwable) {
-            android.util.Log.w("MartRepository", "Notice: syncShopsAndProductsFromCloud error: ${e.message}")
-        }
-        res
+        val report = syncShopsAndProductsFromCloudWithResult()
+        Pair(report.syncedShopsCount, report.syncedProductsCount)
     }
+
+    suspend fun syncShopsAndProductsFromCloudWithResult(): FirestoreSyncService.ShopAndProductSyncReport =
+        withContext(Dispatchers.IO) {
+            try {
+                FirestoreSyncService.performShopAndProductCloudSyncWithResult(dao)
+            } catch (e: Throwable) {
+                android.util.Log.w("MartRepository", "Notice: syncShopsAndProductsFromCloud error: ${e.message}")
+                FirestoreSyncService.ShopAndProductSyncReport(
+                    success = false,
+                    syncedShopsCount = 0,
+                    syncedProductsCount = 0,
+                    errorMessage = e.message ?: "Unable to sync catalog from Cloud Firestore."
+                )
+            }
+        }
 }

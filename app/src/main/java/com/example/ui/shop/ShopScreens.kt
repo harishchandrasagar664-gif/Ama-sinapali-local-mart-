@@ -8,7 +8,8 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.launch
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.Image
@@ -18,14 +19,17 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.CheckCircle
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -44,6 +48,10 @@ import com.example.domain.model.NotificationType
 import com.example.domain.model.PromotionType
 import com.example.domain.model.PromotionStatus
 import com.example.data.local.entities.PromotionEntity
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.ui.components.OdiaGreetingHeader
 import com.example.ui.components.ProductImage
 import com.example.ui.components.ProfilePhotoUploadDialog
@@ -51,10 +59,15 @@ import com.example.ui.components.StatusBadge
 import com.example.ui.components.UserAvatar
 import com.example.util.ImageStorageHelper
 import com.example.util.FirebaseStorageHelper
+import com.example.util.PriceValidationResult
+import com.example.util.ProductDiscountUtils
 import com.example.util.StorageUploadResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.viewmodel.ProductSyncStatus
 import com.example.ui.viewmodel.Screen
 
 @Composable
@@ -611,25 +624,35 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
     val user by viewModel.currentUser.collectAsState()
     val shops by viewModel.allShops.collectAsState()
     val products by viewModel.allProducts.collectAsState()
+    val isProductSyncing by viewModel.isProductSyncing.collectAsState()
+    val productSyncStatus by viewModel.productSyncStatus.collectAsState()
+    val currentFirebaseUid by viewModel.currentFirebaseUid.collectAsState()
     val myShop = shops.find {
         it.ownerId == user?.id ||
         (user?.shopId != null && it.id == user?.shopId) ||
         (user?.phone != null && it.phone.isNotBlank() && it.phone == user?.phone)
     }
+    val isFirebaseSignedIn = !currentFirebaseUid.isNullOrBlank() &&
+        (user?.firebaseUid.isNullOrBlank() || user?.firebaseUid == currentFirebaseUid) &&
+        (myShop?.ownerUid.isNullOrBlank() || myShop?.ownerUid == currentFirebaseUid)
     val myProducts = if (myShop != null) products.filter { it.shopId == myShop.id } else emptyList()
 
     var showProductDialog by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<ProductEntity?>(null) }
     var prodName by remember { mutableStateOf("") }
-    var prodPrice by remember { mutableStateOf("") }
+    var prodOriginalPrice by remember { mutableStateOf("") }
+    var prodOfferPrice by remember { mutableStateOf("") }
+    var prodDescription by remember { mutableStateOf("") }
     var prodCat by remember { mutableStateOf("Groceries & Spices") }
     var savedImagePath by remember { mutableStateOf<String?>(null) }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var imageSourceDescription by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     var isUploadingImage by remember { mutableStateOf(false) }
     var uploadStatusMessage by remember { mutableStateOf<String?>(null) }
+    var isUploadError by remember { mutableStateOf(false) }
 
     // Photo Picker (Gallery)
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -639,26 +662,32 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
             selectedImageUri = uri
             capturedBitmap = null
             isUploadingImage = true
+            isUploadError = false
             uploadStatusMessage = "Uploading to Firebase Storage... ☁️"
 
-            val localPath = ImageStorageHelper.copyProductUri(context, uri)
-            savedImagePath = localPath ?: uri.toString()
-
             scope.launch {
+                val localPath = withContext(Dispatchers.IO) {
+                    ImageStorageHelper.copyProductUri(context, uri)
+                }
+                savedImagePath = localPath ?: uri.toString()
+
                 val result = FirebaseStorageHelper.uploadProductUri(context, uri, myShop?.id ?: 0L)
                 when (result) {
                     is StorageUploadResult.Success -> {
                         savedImagePath = result.downloadUrl
                         uploadStatusMessage = "Uploaded to Firebase Storage ☁️"
+                        isUploadError = false
                         isUploadingImage = false
                     }
                     is StorageUploadResult.Fallback -> {
                         savedImagePath = result.dataUrl
                         uploadStatusMessage = "Cloud image ready"
+                        isUploadError = false
                         isUploadingImage = false
                     }
                     is StorageUploadResult.Error -> {
                         uploadStatusMessage = result.errorMessage
+                        isUploadError = true
                         isUploadingImage = false
                     }
                 }
@@ -666,34 +695,41 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
         }
     }
 
-    // Camera Launcher
+    // Full-Resolution Camera Launcher (no thumbnail cropping)
     val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bitmap: Bitmap? ->
-        if (bitmap != null) {
-            capturedBitmap = bitmap
-            selectedImageUri = null
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        val uri = pendingCameraUri
+        if (success && uri != null) {
+            selectedImageUri = uri
+            capturedBitmap = null
             isUploadingImage = true
+            isUploadError = false
             uploadStatusMessage = "Uploading to Firebase Storage... ☁️"
 
-            val localPath = ImageStorageHelper.saveProductBitmap(context, bitmap)
-            savedImagePath = localPath
-
             scope.launch {
-                val result = FirebaseStorageHelper.uploadProductBitmap(context, bitmap, myShop?.id ?: 0L)
+                val localPath = withContext(Dispatchers.IO) {
+                    ImageStorageHelper.copyProductUri(context, uri)
+                }
+                savedImagePath = localPath ?: uri.toString()
+
+                val result = FirebaseStorageHelper.uploadProductUri(context, uri, myShop?.id ?: 0L)
                 when (result) {
                     is StorageUploadResult.Success -> {
                         savedImagePath = result.downloadUrl
                         uploadStatusMessage = "Uploaded to Firebase Storage ☁️"
+                        isUploadError = false
                         isUploadingImage = false
                     }
                     is StorageUploadResult.Fallback -> {
                         savedImagePath = result.dataUrl
                         uploadStatusMessage = "Cloud image ready"
+                        isUploadError = false
                         isUploadingImage = false
                     }
                     is StorageUploadResult.Error -> {
                         uploadStatusMessage = result.errorMessage
+                        isUploadError = true
                         isUploadingImage = false
                     }
                 }
@@ -706,7 +742,15 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            cameraLauncher.launch()
+            try {
+                val cameraDir = File(context.cacheDir, "camera").apply { if (!exists()) mkdirs() }
+                val photoFile = File(cameraDir, "prod_cam_${System.currentTimeMillis()}.jpg")
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+                pendingCameraUri = uri
+                cameraLauncher.launch(uri)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not launch camera: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
         } else {
             Toast.makeText(context, "Camera permission is required to take product photo", Toast.LENGTH_SHORT).show()
         }
@@ -720,6 +764,18 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                     IconButton(onClick = { viewModel.navigateTo(Screen.ShopOwnerDashboard) }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.retryProductSync() },
+                        enabled = !isProductSyncing
+                    ) {
+                        if (isProductSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = "Sync Products to Cloud Firestore")
+                        }
+                    }
                 }
             )
         },
@@ -728,12 +784,16 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                 onClick = {
                     editingProduct = null
                     prodName = ""
-                    prodPrice = ""
+                    prodOriginalPrice = ""
+                    prodOfferPrice = ""
+                    prodDescription = ""
                     prodCat = "Groceries & Spices"
                     savedImagePath = null
                     selectedImageUri = null
                     capturedBitmap = null
                     imageSourceDescription = null
+                    uploadStatusMessage = null
+                    isUploadError = false
                     showProductDialog = true
                 },
                 containerColor = LocalTealPrimary
@@ -749,21 +809,157 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(myProducts) { prod ->
+            item {
+                val errStatus = productSyncStatus as? ProductSyncStatus.Error
+                val needsOtpBanner = errStatus != null || !isFirebaseSignedIn
+                val syncedStatus = productSyncStatus as? ProductSyncStatus.Synced
+
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            editingProduct = prod
-                            prodName = prod.name
-                            prodPrice = prod.price.toInt().toString()
-                            prodCat = prod.category
-                            savedImagePath = prod.imageUrl
-                            selectedImageUri = null
-                            capturedBitmap = null
-                            imageSourceDescription = null
-                            showProductDialog = true
-                        },
+                        .testTag("shop_product_sync_banner"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = when {
+                            isProductSyncing || productSyncStatus is ProductSyncStatus.Syncing ->
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                            needsOtpBanner ->
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                            else ->
+                                Color(0xFFE8F5E9)
+                        }
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (isProductSyncing || productSyncStatus is ProductSyncStatus.Syncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalTealPrimary
+                                )
+                                Text(
+                                    "Syncing products with Cloud Firestore...",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = LocalTealDark
+                                )
+                            } else if (needsOtpBanner) {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        if (currentFirebaseUid.isNullOrBlank()) "OTP Verification Required for Cloud Sync"
+                                        else if (!isFirebaseSignedIn) "OTP Re-verification Needed for Cloud Sync"
+                                        else "Cloud Sync Warning",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
+                                        errStatus?.message
+                                            ?: "Sign in with Firebase Mobile OTP to publish your products so customers on other devices can see them.",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            } else {
+                                Icon(
+                                    Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2E7D32),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Cloud Firestore Connected",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1B5E20)
+                                    )
+                                    Text(
+                                        syncedStatus?.message ?: "Your products sync live to all customer devices.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (!isProductSyncing) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { viewModel.retryProductSync() },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp)
+                                        .testTag("shop_retry_sync_btn"),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Retry Sync", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+
+                                if (needsOtpBanner) {
+                                    Button(
+                                        onClick = { viewModel.reauthenticateShopOwnerWithOtp() },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(36.dp)
+                                            .testTag("shop_relogin_otp_btn"),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                    ) {
+                                        Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Re-login with OTP", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            items(myProducts) { prod ->
+                val cardDiscountInfo = remember(prod.price, prod.discountPrice) {
+                    ProductDiscountUtils.calculate(prod.price, prod.discountPrice)
+                }
+                val openEditDialog = {
+                    editingProduct = prod
+                    prodName = prod.name
+                    prodOriginalPrice = ProductDiscountUtils.formatPriceInput(prod.price)
+                    prodOfferPrice = prod.discountPrice?.let { ProductDiscountUtils.formatPriceInput(it) } ?: ""
+                    prodDescription = prod.description
+                    prodCat = prod.category
+                    savedImagePath = prod.imageUrl
+                    selectedImageUri = null
+                    capturedBitmap = null
+                    imageSourceDescription = null
+                    uploadStatusMessage = null
+                    isUploadError = false
+                    showProductDialog = true
+                }
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { openEditDialog() },
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Row(
@@ -773,13 +969,67 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                         ProductImage(
                             imageUrl = prod.imageUrl,
                             contentDescription = prod.name,
-                            modifier = Modifier.size(56.dp),
-                            shape = RoundedCornerShape(8.dp)
+                            modifier = Modifier.size(72.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            contentScale = ContentScale.Fit,
+                            alignment = Alignment.Center,
+                            backgroundColor = Color.White
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(prod.name, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("₹${prod.price.toInt()} • Stock: ${prod.stock}", fontSize = 12.sp, color = LocalTextSecondary)
+                            if (cardDiscountInfo != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        cardDiscountInfo.formattedOfferPrice,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = LocalTealPrimary
+                                    )
+                                    Text(
+                                        cardDiscountInfo.formattedOriginalPrice,
+                                        fontSize = 11.sp,
+                                        color = LocalTextMuted,
+                                        textDecoration = TextDecoration.LineThrough
+                                    )
+                                    Surface(
+                                        color = Color(0xFFD32F2F),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            cardDiscountInfo.discountBadgeShort,
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "You Save ${cardDiscountInfo.formattedSavings} • Stock: ${prod.stock}",
+                                    fontSize = 11.sp,
+                                    color = LocalSuccess,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            } else {
+                                Text(
+                                    "${ProductDiscountUtils.formatRupees(prod.price)} • Stock: ${prod.stock}",
+                                    fontSize = 12.sp,
+                                    color = LocalTextSecondary
+                                )
+                            }
+                            if (prod.description.isNotBlank()) {
+                                Text(
+                                    prod.description,
+                                    fontSize = 11.sp,
+                                    color = LocalTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Text(
                                 if (prod.isAvailable) "In Stock" else "Out of Stock",
                                 color = if (prod.isAvailable) LocalSuccess else LocalError,
@@ -787,17 +1037,7 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                        IconButton(onClick = {
-                            editingProduct = prod
-                            prodName = prod.name
-                            prodPrice = prod.price.toInt().toString()
-                            prodCat = prod.category
-                            savedImagePath = prod.imageUrl
-                            selectedImageUri = null
-                            capturedBitmap = null
-                            imageSourceDescription = null
-                            showProductDialog = true
-                        }) {
+                        IconButton(onClick = { openEditDialog() }) {
                             Icon(Icons.Default.Edit, contentDescription = "Edit Product", tint = LocalTealPrimary)
                         }
                         Switch(
@@ -810,32 +1050,109 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
         }
 
         if (showProductDialog && myShop != null) {
+            val priceValidation = remember(prodOriginalPrice, prodOfferPrice) {
+                ProductDiscountUtils.validatePriceInputs(prodOriginalPrice, prodOfferPrice)
+            }
             AlertDialog(
                 onDismissRequest = {
                     showProductDialog = false
                     editingProduct = null
+                    prodName = ""
+                    prodOriginalPrice = ""
+                    prodOfferPrice = ""
+                    prodDescription = ""
                     selectedImageUri = null
                     capturedBitmap = null
                     savedImagePath = null
                     imageSourceDescription = null
+                    uploadStatusMessage = null
+                    isUploadError = false
                 },
                 title = { Text(if (editingProduct != null) "Edit Product" else "Add New Product") },
                 text = {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedTextField(
                             value = prodName,
                             onValueChange = { prodName = it },
                             label = { Text("Product Name") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("product_name_input")
                         )
                         OutlinedTextField(
-                            value = prodPrice,
-                            onValueChange = { prodPrice = it },
-                            label = { Text("Price (₹)") },
-                            modifier = Modifier.fillMaxWidth()
+                            value = prodOriginalPrice,
+                            onValueChange = { prodOriginalPrice = it },
+                            label = { Text("Original Price (MRP) (₹)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("original_price_input")
+                        )
+                        OutlinedTextField(
+                            value = prodOfferPrice,
+                            onValueChange = { prodOfferPrice = it },
+                            label = { Text("Offer Price (Selling Price) (₹)") },
+                            placeholder = { Text("Leave blank if same as Original Price", fontSize = 12.sp) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            isError = priceValidation is PriceValidationResult.Invalid && prodOfferPrice.isNotBlank(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("offer_price_input")
+                        )
+                        if (priceValidation is PriceValidationResult.Invalid && (prodOriginalPrice.isNotBlank() || prodOfferPrice.isNotBlank())) {
+                            Text(
+                                text = priceValidation.errorMessage,
+                                color = LocalError,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        } else if (priceValidation is PriceValidationResult.Valid && priceValidation.discountInfo != null) {
+                            val dInfo = priceValidation.discountInfo
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = LocalSuccess.copy(alpha = 0.1f)),
+                                border = BorderStroke(1.dp, LocalSuccess.copy(alpha = 0.35f))
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(
+                                        text = "Discount: ${dInfo.discountPercentLabel} • You Save: ${dInfo.formattedSavings}",
+                                        color = LocalSuccess,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = "MRP ${dInfo.formattedOriginalPrice} → Offer ${dInfo.formattedOfferPrice}",
+                                        color = LocalTealDark,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = prodDescription,
+                            onValueChange = { prodDescription = it },
+                            label = { Text("ଉତ୍ପାଦର ବିବରଣୀ (Product Description)") },
+                            placeholder = {
+                                Text(
+                                    "ଏଠାରେ ଉତ୍ପାଦର ନାମ, ରଙ୍ଗ, ଗୁଣବତ୍ତା, ଆକାର ଓ ବିଶେଷତା ବିଷୟରେ ଲେଖନ୍ତୁ...",
+                                    fontSize = 12.sp
+                                )
+                            },
+                            singleLine = false,
+                            minLines = 4,
+                            maxLines = 8,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp)
+                                .testTag("product_description_input")
                         )
                         OutlinedTextField(
                             value = prodCat,
@@ -923,32 +1240,55 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(min = 220.dp, max = 340.dp),
+                                    .heightIn(min = 240.dp, max = 380.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = 220.dp, max = 340.dp),
+                                        .heightIn(min = 240.dp, max = 380.dp)
+                                        .background(Color.White),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    ProductImage(
-                                        imageUrl = savedImagePath ?: selectedImageUri?.toString(),
-                                        contentDescription = "Product Image Preview",
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 220.dp, max = 340.dp)
-                                            .padding(6.dp),
-                                        contentScale = ContentScale.Fit
-                                    )
+                                    if (capturedBitmap != null) {
+                                        Image(
+                                            bitmap = capturedBitmap!!.asImageBitmap(),
+                                            contentDescription = "Product Image Preview",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 220.dp, max = 360.dp)
+                                                .padding(8.dp),
+                                            alignment = Alignment.Center,
+                                            contentScale = ContentScale.Fit
+                                        )
+                                    } else {
+                                        val previewImage = if (savedImagePath?.startsWith("http") == true) {
+                                            savedImagePath
+                                        } else {
+                                            selectedImageUri?.toString() ?: savedImagePath
+                                        }
+                                        ProductImage(
+                                            imageUrl = previewImage,
+                                            contentDescription = "Product Image Preview",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 220.dp, max = 360.dp)
+                                                .padding(8.dp),
+                                            contentScale = ContentScale.Fit,
+                                            alignment = Alignment.Center,
+                                            backgroundColor = Color.White
+                                        )
+                                    }
                                     IconButton(
                                         onClick = {
                                             savedImagePath = null
                                             selectedImageUri = null
                                             capturedBitmap = null
                                             uploadStatusMessage = null
+                                            isUploadError = false
                                         },
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
@@ -961,10 +1301,12 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                                 }
                             }
                             if (!uploadStatusMessage.isNullOrBlank() && !isUploadingImage) {
+                                val statusColor = if (isUploadError) LocalError else LocalSuccess
+                                val statusIcon = if (isUploadError) Icons.Default.ErrorOutline else Icons.Default.CheckCircle
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = LocalSuccess, modifier = Modifier.size(14.dp))
+                                    Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(14.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text(uploadStatusMessage!!, fontSize = 11.sp, color = LocalSuccess, fontWeight = FontWeight.Medium)
+                                    Text(uploadStatusMessage!!, fontSize = 11.sp, color = statusColor, fontWeight = FontWeight.Medium)
                                 }
                             }
                         } else if (editingProduct == null) {
@@ -979,31 +1321,35 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                 },
                 confirmButton = {
                     val hasImage = !savedImagePath.isNullOrBlank() || editingProduct != null
+                    val validPricing = priceValidation as? PriceValidationResult.Valid
                     Button(
                         onClick = {
-                            val price = prodPrice.toDoubleOrNull() ?: 100.0
+                            val pricing = validPricing ?: return@Button
                             val finalImageUrl = savedImagePath
-                                ?: selectedImageUri?.let { ImageStorageHelper.copyProductUri(context, it) }
-                                ?: capturedBitmap?.let { ImageStorageHelper.saveProductBitmap(context, it) }
+                                ?: selectedImageUri?.toString()
                                 ?: editingProduct?.imageUrl
                                 ?: "hero_local_mart"
+                            val finalDescription = prodDescription.trim()
 
                             if (editingProduct != null) {
                                 val updated = editingProduct!!.copy(
-                                    name = prodName.ifBlank { editingProduct!!.name },
-                                    price = price,
-                                    category = prodCat.ifBlank { editingProduct!!.category },
+                                    name = prodName.trim().ifBlank { editingProduct!!.name },
+                                    price = pricing.originalPrice,
+                                    discountPrice = pricing.offerPrice,
+                                    category = prodCat.trim().ifBlank { editingProduct!!.category },
+                                    description = finalDescription,
                                     imageUrl = finalImageUrl
                                 )
                                 viewModel.addOrUpdateProduct(updated)
                             } else {
                                 val newProd = ProductEntity(
                                     shopId = myShop.id,
-                                    name = prodName.ifBlank { "Local Product" },
-                                    category = prodCat.ifBlank { "Groceries & Spices" },
+                                    name = prodName.trim().ifBlank { "Local Product" },
+                                    category = prodCat.trim().ifBlank { "Groceries & Spices" },
                                     imageUrl = finalImageUrl,
-                                    description = "Freshly supplied by ${myShop.name}",
-                                    price = price,
+                                    description = finalDescription,
+                                    price = pricing.originalPrice,
+                                    discountPrice = pricing.offerPrice,
                                     unit = "1 unit",
                                     stock = 20
                                 )
@@ -1011,17 +1357,24 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                             }
                             showProductDialog = false
                             editingProduct = null
+                            prodName = ""
+                            prodOriginalPrice = ""
+                            prodOfferPrice = ""
+                            prodDescription = ""
                             selectedImageUri = null
                             capturedBitmap = null
                             savedImagePath = null
                             isUploadingImage = false
                             uploadStatusMessage = null
+                            isUploadError = false
                         },
-                        enabled = prodName.isNotBlank() && !isUploadingImage && hasImage
+                        enabled = prodName.isNotBlank() && validPricing != null && !isUploadingImage && hasImage,
+                        modifier = Modifier.testTag("save_product_button")
                     ) {
                         Text(
                             if (isUploadingImage) "Uploading..."
                             else if (!hasImage) "Select Photo First"
+                            else if (validPricing == null) "Enter Valid Price"
                             else if (editingProduct != null) "Save"
                             else "Add Product"
                         )
@@ -1031,10 +1384,16 @@ fun ShopProductManagementScreen(viewModel: MainViewModel) {
                     TextButton(onClick = {
                         showProductDialog = false
                         editingProduct = null
+                        prodName = ""
+                        prodOriginalPrice = ""
+                        prodOfferPrice = ""
+                        prodDescription = ""
                         selectedImageUri = null
                         capturedBitmap = null
                         savedImagePath = null
                         imageSourceDescription = null
+                        uploadStatusMessage = null
+                        isUploadError = false
                     }) { Text("Cancel") }
                 }
             )
@@ -1058,7 +1417,7 @@ fun ShopOffersPromotionsScreen(viewModel: MainViewModel) {
     val myProducts = if (myShop != null) products.filter { it.shopId == myShop.id } else emptyList()
     val myPromotions = if (myShop != null) allPromotions.filter { it.shopId == myShop.id } else emptyList()
 
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     // Promotion Creation Form State
     var selectedType by remember { mutableStateOf(PromotionType.PROMOTIONAL_BANNER) }
@@ -1066,7 +1425,7 @@ fun ShopOffersPromotionsScreen(viewModel: MainViewModel) {
     var promoDescription by remember { mutableStateOf("") }
     var selectedProduct by remember { mutableStateOf<ProductEntity?>(null) }
     var selectedLocation by remember { mutableStateOf("Sinapali Market") }
-    var durationDays by remember { mutableStateOf(7) }
+    var durationDays by remember { mutableIntStateOf(7) }
     var startDate by remember { mutableStateOf("2026-09-29") }
     var endDate by remember { mutableStateOf("2026-10-06") }
 

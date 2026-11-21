@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
@@ -9,13 +10,29 @@ import com.example.data.local.SeedData
 import com.example.data.local.entities.*
 import com.example.data.firebase.FirestoreSyncService
 import com.example.data.firebase.FirebaseSyncConfig
+import com.example.data.repository.CloudSaveResult
 import com.example.data.repository.MartRepository
 import com.example.domain.model.*
 import com.example.service.AuthManager
+import com.example.service.FirebasePhoneAuthHelper
+import com.example.service.PhoneAuthSignInResult
 import com.example.service.RazorpayPaymentServiceImpl
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.PhoneAuthProvider
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+sealed class ProductSyncStatus {
+    object Idle : ProductSyncStatus()
+    object Syncing : ProductSyncStatus()
+    data class Synced(val message: String, val timestamp: Long = System.currentTimeMillis()) : ProductSyncStatus()
+    data class Error(val message: String, val requiresAuth: Boolean = false) : ProductSyncStatus()
+}
 
 data class PromotionPricingConfig(
     val productAdDailyRate: Double = 40.0,
@@ -64,6 +81,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isVerifyingFirebase = MutableStateFlow(false)
     val isVerifyingFirebase: StateFlow<Boolean> = _isVerifyingFirebase.asStateFlow()
 
+    private val _isAuthLoading = MutableStateFlow(false)
+    val isAuthLoading: StateFlow<Boolean> = _isAuthLoading.asStateFlow()
+
+    private val _isProductSyncing = MutableStateFlow(false)
+    val isProductSyncing: StateFlow<Boolean> = _isProductSyncing.asStateFlow()
+
+    private val _productSyncStatus = MutableStateFlow<ProductSyncStatus>(ProductSyncStatus.Idle)
+    val productSyncStatus: StateFlow<ProductSyncStatus> = _productSyncStatus.asStateFlow()
+
+    private val _isCustomerStoreLoading = MutableStateFlow(false)
+    val isCustomerStoreLoading: StateFlow<Boolean> = _isCustomerStoreLoading.asStateFlow()
+
+    private val _storeSyncError = MutableStateFlow<String?>(null)
+    val storeSyncError: StateFlow<String?> = _storeSyncError.asStateFlow()
+
+    private val _lastCatalogSyncTime = MutableStateFlow<Long?>(null)
+    val lastCatalogSyncTime: StateFlow<Long?> = _lastCatalogSyncTime.asStateFlow()
+
+    private var ordersCustomerListener: ListenerRegistration? = null
+    private var ordersOwnerListener: ListenerRegistration? = null
+    private var shopsPublicListener: ListenerRegistration? = null
+    private var shopsOwnerListener: ListenerRegistration? = null
+    private var productsPublicListener: ListenerRegistration? = null
+    private var productsOwnerListener: ListenerRegistration? = null
+    private val syncedShopIdsInSession = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+    private val _currentFirebaseUid = MutableStateFlow(FirebasePhoneAuthHelper.currentUid())
+    val currentFirebaseUid: StateFlow<String?> = _currentFirebaseUid.asStateFlow()
+
+    private var lastObservedFirebaseUid: String? = FirebasePhoneAuthHelper.currentUid()
+
+    private val authStateListener = FirebaseAuth.AuthStateListener {
+        val currentUid = FirebasePhoneAuthHelper.currentUid()
+        _currentFirebaseUid.value = currentUid
+        if (currentUid != lastObservedFirebaseUid) {
+            syncedShopIdsInSession.clear()
+            lastObservedFirebaseUid = currentUid
+        }
+        attachRealtimeFirestoreListeners()
+        verifyFirebaseConnection()
+    }
+
     init {
         try {
             val prefs = application.getSharedPreferences("firebase_prefs", Context.MODE_PRIVATE)
@@ -78,85 +136,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (authManager.isShopOwnerSessionActive()) {
             _currentScreen.value = Screen.ShopOwnerDashboard
         }
+        try {
+            FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
+        } catch (_: Throwable) { }
         verifyFirebaseConnection()
         syncOrdersFromCloud()
         syncShopsAndProductsFromCloud()
         startPeriodicOrderSync()
-        startRealtimeFirebaseOrdersListener()
-        startRealtimeFirebaseShopsListener()
-        startRealtimeFirebaseProductsListener()
+        attachRealtimeFirestoreListeners()
     }
 
-    private fun startRealtimeFirebaseOrdersListener() {
+    override fun onCleared() {
+        super.onCleared()
         try {
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-            firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        android.util.Log.w("MainViewModel", "Realtime Firebase listener notice: ${error.message}")
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        viewModelScope.launch(Dispatchers.IO) {
-                            if (snapshot.documentChanges.isNotEmpty()) {
-                                for (change in snapshot.documentChanges) {
-                                    val parsed = FirestoreSyncService.firestoreDocToOrder(change.document)
-                                    if (parsed != null) {
-                                        val (remoteOrder, remoteItems) = parsed
-                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
-                                    }
-                                }
-                            } else {
-                                for (doc in snapshot.documents) {
-                                    val parsed = FirestoreSyncService.firestoreDocToOrder(doc)
-                                    if (parsed != null) {
-                                        val (remoteOrder, remoteItems) = parsed
-                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-        } catch (e: Throwable) {
-            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase listener: ${e.message}")
-        }
+            FirebaseAuth.getInstance().removeAuthStateListener(authStateListener)
+        } catch (_: Throwable) { }
+        detachRealtimeFirestoreListeners()
     }
 
-    private fun startRealtimeFirebaseShopsListener() {
+    private fun detachRealtimeFirestoreListeners() {
+        ordersCustomerListener?.remove(); ordersCustomerListener = null
+        ordersOwnerListener?.remove(); ordersOwnerListener = null
+        shopsPublicListener?.remove(); shopsPublicListener = null
+        shopsOwnerListener?.remove(); shopsOwnerListener = null
+        productsPublicListener?.remove(); productsPublicListener = null
+        productsOwnerListener?.remove(); productsOwnerListener = null
+    }
+
+    private fun attachRealtimeFirestoreListeners() {
+        detachRealtimeFirestoreListeners()
         try {
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-            firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+            val firestore = FirebaseFirestore.getInstance()
+            val uid = FirebasePhoneAuthHelper.currentUid()
+
+            // Public approved shops listener (matches firestore.rules allow list)
+            shopsPublicListener = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                .whereEqualTo("isApproved", true)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        android.util.Log.w("MainViewModel", "Realtime Firebase shops listener notice: ${error.message}")
+                        val msg = FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, FirebaseSyncConfig.COLLECTION_SHOPS)
+                        _storeSyncError.value = msg
                         return@addSnapshotListener
                     }
                     if (snapshot != null) {
                         viewModelScope.launch(Dispatchers.IO) {
                             for (doc in snapshot.documents) {
-                                val parsed = FirestoreSyncService.firestoreDocToShop(doc)
-                                if (parsed != null) {
-                                    repository.insertOrUpdateShopFromCloud(parsed)
+                                FirestoreSyncService.firestoreDocToShop(doc)?.let {
+                                    repository.insertOrUpdateShopFromCloud(it)
                                 }
                             }
                         }
                     }
                 }
-        } catch (e: Throwable) {
-            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase shops listener: ${e.message}")
-        }
-    }
 
-    private fun startRealtimeFirebaseProductsListener() {
-        try {
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-            firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+            // Public approved & available products listener (matches firestore.rules allow list)
+            productsPublicListener = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                .whereEqualTo("isApproved", true)
+                .whereEqualTo("isAvailable", true)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        android.util.Log.w("MainViewModel", "Realtime Firebase products listener notice: ${error.message}")
+                        val msg = FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                        _storeSyncError.value = msg
                         return@addSnapshotListener
                     }
+                    _storeSyncError.value = null
+                    _lastCatalogSyncTime.value = System.currentTimeMillis()
                     if (snapshot != null) {
                         viewModelScope.launch(Dispatchers.IO) {
                             if (snapshot.documentChanges.isNotEmpty()) {
@@ -164,41 +208,225 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     when (change.type) {
                                         com.google.firebase.firestore.DocumentChange.Type.ADDED,
                                         com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
-                                            val parsed = FirestoreSyncService.firestoreDocToProduct(change.document)
-                                            if (parsed != null) {
-                                                repository.insertOrUpdateProductFromCloud(parsed)
+                                            FirestoreSyncService.firestoreDocToProduct(change.document)?.let {
+                                                repository.insertOrUpdateProductFromCloud(it)
                                             }
                                         }
                                         com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
-                                            val parsed = FirestoreSyncService.firestoreDocToProduct(change.document)
-                                            if (parsed != null) {
-                                                repository.deleteProductLocally(parsed)
+                                            FirestoreSyncService.firestoreDocToProduct(change.document)?.let { removedProd ->
+                                                val currentFirebaseUid = FirebasePhoneAuthHelper.currentUid()
+                                                if (removedProd.ownerUid.isBlank() || removedProd.ownerUid != currentFirebaseUid) {
+                                                    repository.deleteProductLocally(removedProd)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             } else {
                                 for (doc in snapshot.documents) {
-                                    val parsed = FirestoreSyncService.firestoreDocToProduct(doc)
-                                    if (parsed != null) {
-                                        repository.insertOrUpdateProductFromCloud(parsed)
+                                    FirestoreSyncService.firestoreDocToProduct(doc)?.let {
+                                        repository.insertOrUpdateProductFromCloud(it)
                                     }
                                 }
                             }
                         }
                     }
                 }
+
+            // Authenticated user-scoped listeners (own shops, own products, own orders)
+            if (!uid.isNullOrBlank()) {
+                shopsOwnerListener = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                    .whereEqualTo("ownerUid", uid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_SHOPS}?ownerUid")
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            viewModelScope.launch(Dispatchers.IO) {
+                                for (doc in snapshot.documents) {
+                                    FirestoreSyncService.firestoreDocToShop(doc)?.let {
+                                        repository.insertOrUpdateShopFromCloud(it)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                productsOwnerListener = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                    .whereEqualTo("ownerUid", uid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            val msg = FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_PRODUCTS}?ownerUid")
+                            _productSyncStatus.value = ProductSyncStatus.Error(msg, requiresAuth = true)
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            viewModelScope.launch(Dispatchers.IO) {
+                                for (change in snapshot.documentChanges) {
+                                    when (change.type) {
+                                        com.google.firebase.firestore.DocumentChange.Type.ADDED,
+                                        com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
+                                            FirestoreSyncService.firestoreDocToProduct(change.document)?.let {
+                                                repository.insertOrUpdateProductFromCloud(it)
+                                            }
+                                        }
+                                        com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
+                                            FirestoreSyncService.firestoreDocToProduct(change.document)?.let {
+                                                repository.deleteProductLocally(it)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                ordersCustomerListener = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .whereEqualTo("customerUid", uid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_ORDERS}?customerUid")
+                            return@addSnapshotListener
+                        }
+                        snapshot?.let { snap ->
+                            viewModelScope.launch(Dispatchers.IO) {
+                                for (doc in snap.documents) {
+                                    FirestoreSyncService.firestoreDocToOrder(doc)?.let { (remoteOrder, remoteItems) ->
+                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                ordersOwnerListener = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .whereEqualTo("shopOwnerUid", uid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            FirestoreSyncService.handleFirestoreError(error, FirestoreSyncService.OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_ORDERS}?shopOwnerUid")
+                            return@addSnapshotListener
+                        }
+                        snapshot?.let { snap ->
+                            viewModelScope.launch(Dispatchers.IO) {
+                                for (doc in snap.documents) {
+                                    FirestoreSyncService.firestoreDocToOrder(doc)?.let { (remoteOrder, remoteItems) ->
+                                        repository.insertOrderFromCloud(remoteOrder, remoteItems)
+                                    }
+                                }
+                            }
+                        }
+                    }
+            }
         } catch (e: Throwable) {
-            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase products listener: ${e.message}")
+            android.util.Log.w("MainViewModel", "Could not initialize Realtime Firebase listeners: ${e.message}")
         }
     }
 
     fun syncShopsAndProductsFromCloud() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
+            _isCustomerStoreLoading.value = true
+            _isProductSyncing.value = true
             try {
-                repository.syncShopsAndProductsFromCloud()
+                val report = repository.syncShopsAndProductsFromCloudWithResult()
+                if (report.success) {
+                    _storeSyncError.value = null
+                    _lastCatalogSyncTime.value = System.currentTimeMillis()
+                    if (FirebasePhoneAuthHelper.currentUid() != null) {
+                        _productSyncStatus.value = ProductSyncStatus.Synced(
+                            "Cloud Firestore Synced (${report.syncedShopsCount} shops, ${report.syncedProductsCount} products)"
+                        )
+                    }
+                } else {
+                    _storeSyncError.value = report.errorMessage ?: "Unable to sync products from Cloud Firestore."
+                    _productSyncStatus.value = ProductSyncStatus.Error(
+                        message = report.errorMessage ?: "Unable to sync products from Cloud Firestore.",
+                        requiresAuth = report.isAuthOrPermissionError
+                    )
+                }
             } catch (e: Throwable) {
-                android.util.Log.w("MainViewModel", "Notice: syncShopsAndProductsFromCloud: ${e.message}")
+                val msg = e.message ?: "Cloud sync error"
+                _storeSyncError.value = msg
+                _productSyncStatus.value = ProductSyncStatus.Error(msg)
+            } finally {
+                _isCustomerStoreLoading.value = false
+                _isProductSyncing.value = false
+            }
+        }
+    }
+
+    fun retryCatalogSync() {
+        syncShopsAndProductsFromCloud()
+    }
+
+    fun retryProductSync() {
+        viewModelScope.launch {
+            _isProductSyncing.value = true
+            _productSyncStatus.value = ProductSyncStatus.Syncing
+            val uid = FirebasePhoneAuthHelper.currentUid()
+            if (uid.isNullOrBlank()) {
+                _isProductSyncing.value = false
+                val msg = "Mobile OTP login expired or not active. Tap 'Re-login with OTP' to sync your shop & products to Cloud Firestore."
+                _productSyncStatus.value = ProductSyncStatus.Error(msg, requiresAuth = true)
+                _userMessage.value = msg
+                return@launch
+            }
+            try {
+                val user = currentUser.value
+                val shops = repository.getAllShopsSync()
+                val myShop = shops.find {
+                    it.ownerId == user?.id ||
+                    (user?.shopId != null && it.id == user.shopId) ||
+                    (!user?.phone.isNullOrBlank() && it.phone == user?.phone)
+                }
+                if (myShop != null) {
+                    val shopImg = withContext(Dispatchers.IO) {
+                        com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), myShop.imageUrl)
+                    }
+                    val shopToSync = myShop.copy(ownerUid = uid, imageUrl = shopImg)
+                    val shopSave = repository.updateShop(shopToSync, user?.copy(firebaseUid = uid))
+                    if (!shopSave.cloudSynced) {
+                        _productSyncStatus.value = ProductSyncStatus.Error(
+                            shopSave.errorMessage ?: "Could not sync shop to Cloud Firestore.",
+                            requiresAuth = shopSave.requiresAuth
+                        )
+                        _userMessage.value = shopSave.errorMessage
+                        return@launch
+                    }
+                    syncedShopIdsInSession.add(myShop.id)
+                    val myProducts = repository.getAllProductsSync().filter { it.shopId == myShop.id }
+                    var syncedCount = 0
+                    for (prod in myProducts) {
+                        val prodImg = withContext(Dispatchers.IO) {
+                            com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), prod.imageUrl)
+                        }
+                        val prodToSync = prod.copy(ownerUid = uid, imageUrl = prodImg)
+                        val res = repository.updateProduct(prodToSync)
+                        if (res.cloudSynced) syncedCount++
+                        else {
+                            _productSyncStatus.value = ProductSyncStatus.Error(
+                                res.errorMessage ?: "Failed to sync '${prod.name}' to Cloud Firestore.",
+                                requiresAuth = res.requiresAuth
+                            )
+                            _userMessage.value = res.errorMessage
+                            return@launch
+                        }
+                    }
+                }
+                val report = repository.syncShopsAndProductsFromCloudWithResult()
+                if (report.success) {
+                    _storeSyncError.value = null
+                    _lastCatalogSyncTime.value = System.currentTimeMillis()
+                    _productSyncStatus.value = ProductSyncStatus.Synced("Cloud Firestore Synced ☁️")
+                    _userMessage.value = "All shop products synced to Cloud Firestore! ☁️"
+                } else {
+                    _productSyncStatus.value = ProductSyncStatus.Error(
+                        report.errorMessage ?: "Sync error",
+                        requiresAuth = report.isAuthOrPermissionError
+                    )
+                }
+            } finally {
+                _isProductSyncing.value = false
             }
         }
     }
@@ -210,7 +438,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val report = FirestoreSyncService.verifyFirebaseConnection()
                 _firebaseVerificationReport.value = report
                 _orderSyncStatusMessage.value = report.statusMessage
-            } catch (e: Throwable) {
+            } catch (_: Throwable) {
                 // Ignore
             } finally {
                 _isVerifyingFirebase.value = false
@@ -235,7 +463,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val count = repository.syncOrdersFromCloud()
                 _lastOrderSyncTime.value = System.currentTimeMillis()
                 _orderSyncStatusMessage.value = if (count > 0) "Synced $count orders from cloud across all devices ☁️" else "All town orders up to date with cloud ☁️"
-            } catch (e: Throwable) {
+            } catch (_: Throwable) {
                 _orderSyncStatusMessage.value = "Local mode active"
             } finally {
                 _isOrderSyncing.value = false
@@ -246,12 +474,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startPeriodicOrderSync() {
         viewModelScope.launch {
             while (true) {
-                kotlinx.coroutines.delay(5000)
+                kotlinx.coroutines.delay(15000)
                 try {
                     repository.syncOrdersFromCloud()
-                    repository.syncShopsAndProductsFromCloud()
+                    val report = repository.syncShopsAndProductsFromCloudWithResult()
+                    if (report.success) {
+                        _storeSyncError.value = null
+                        _lastCatalogSyncTime.value = System.currentTimeMillis()
+                    }
                     _lastOrderSyncTime.value = System.currentTimeMillis()
-                } catch (e: Throwable) {
+                } catch (_: Throwable) {
                     // Ignore background sync errors
                 }
             }
@@ -429,7 +661,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        if (screen is Screen.ShopOwnerAuth && authManager.isShopOwnerSessionActive()) {
+        if (screen is Screen.ShopOwnerAuth && authManager.isShopOwnerFirebaseSessionValid()) {
             authManager.restoreShopOwnerSession()
             screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
             _currentScreen.value = Screen.ShopOwnerDashboard
@@ -484,13 +716,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logoutShopOwner() {
         authManager.logoutShopOwner()
+        _currentFirebaseUid.value = FirebasePhoneAuthHelper.currentUid()
         screenBackStack.clear()
         _currentScreen.value = Screen.CustomerHome
         _userMessage.value = "Shop Owner logged out successfully."
     }
 
+    fun reauthenticateShopOwnerWithOtp() {
+        authManager.clearShopOwnerSession()
+        resetShopOwnerOtpState()
+        _currentFirebaseUid.value = FirebasePhoneAuthHelper.currentUid()
+        _currentScreen.value = Screen.ShopOwnerAuth
+    }
+
     fun logoutCustomer() {
         authManager.logout()
+        _currentFirebaseUid.value = FirebasePhoneAuthHelper.currentUid()
         screenBackStack.clear()
         _currentScreen.value = Screen.CustomerHome
         _userMessage.value = "Logged out successfully."
@@ -712,41 +953,135 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (role == UserRole.SHOP_OWNER) {
-            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
-            if (myShop == null || product.shopId != myShop.id) {
-                _userMessage.value = "Access Denied: You can only manage products for your own shop."
-                return
-            }
-        }
-
+        val firebaseUid = FirebasePhoneAuthHelper.currentUid()
         viewModelScope.launch {
-            val universalImageUrl = com.example.util.ImageStorageHelper.toUniversalImageUrl(
-                getApplication(),
-                product.imageUrl.ifBlank { "hero_local_mart" }
-            )
-            val productToSave = product.copy(imageUrl = universalImageUrl)
-            if (productToSave.id == 0L) {
-                val assignedId = repository.addProduct(productToSave)
-                val finalProd = productToSave.copy(id = assignedId)
-                _userMessage.value = "Product added successfully!"
-                launch(Dispatchers.IO) {
-                    try {
-                        FirestoreSyncService.pushProductToFirestore(finalProd)
-                    } catch (e: Throwable) {
-                        android.util.Log.w("MainViewModel", "Notice pushing product: ${e.message}")
+            _isProductSyncing.value = true
+            _productSyncStatus.value = ProductSyncStatus.Syncing
+            try {
+                val shops = repository.getAllShopsSync()
+                if (role == UserRole.SHOP_OWNER) {
+                    val myShop = shops.find {
+                        it.ownerId == user?.id ||
+                        (user?.shopId != null && it.id == user.shopId) ||
+                        (!user?.phone.isNullOrBlank() && it.phone == user?.phone)
+                    }
+                    if (myShop == null || product.shopId != myShop.id) {
+                        _productSyncStatus.value = ProductSyncStatus.Error("Access Denied: You can only manage products for your own shop.")
+                        _userMessage.value = "Access Denied: You can only manage products for your own shop."
+                        return@launch
                     }
                 }
-            } else {
-                repository.updateProduct(productToSave)
-                _userMessage.value = "Product updated successfully!"
-                launch(Dispatchers.IO) {
-                    try {
-                        FirestoreSyncService.pushProductToFirestore(productToSave)
-                    } catch (e: Throwable) {
-                        android.util.Log.w("MainViewModel", "Notice pushing product: ${e.message}")
+
+                if (firebaseUid.isNullOrBlank()) {
+                    _productSyncStatus.value = ProductSyncStatus.Error(
+                        message = "Please re-login with Mobile OTP so your product can sync to Cloud Firestore.",
+                        requiresAuth = true
+                    )
+                    _userMessage.value = "Sign in with Mobile OTP required to sync products to Cloud Firestore."
+                    return@launch
+                }
+
+                val universalImageUrl = withContext(Dispatchers.IO) {
+                    com.example.util.ImageStorageHelper.toUniversalImageUrl(
+                        getApplication(),
+                        product.imageUrl.ifBlank { "hero_local_mart" }
+                    )
+                }
+                val resolvedUid = if (role == UserRole.SHOP_OWNER) firebaseUid else product.ownerUid.ifBlank { firebaseUid }
+                val productToSave = product.copy(
+                    imageUrl = universalImageUrl,
+                    ownerUid = resolvedUid
+                )
+
+                // Ensure parent shop exists in Firestore with matching ownerUid before pushing product
+                val parentShop = shops.find { it.id == productToSave.shopId }
+                    ?: repository.getShopByIdSync(productToSave.shopId)
+                var parentShopError: CloudSaveResult<Unit>? = null
+                if (parentShop != null &&
+                    (parentShop.ownerUid.isBlank() ||
+                        parentShop.ownerUid != firebaseUid ||
+                        !syncedShopIdsInSession.contains(parentShop.id))
+                ) {
+                    val shopImg = withContext(Dispatchers.IO) {
+                        com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), parentShop.imageUrl)
+                    }
+                    val targetShopUid = if (role == UserRole.SHOP_OWNER) firebaseUid else parentShop.ownerUid.ifBlank { firebaseUid }
+                    val shopSync = repository.updateShop(parentShop.copy(ownerUid = targetShopUid, imageUrl = shopImg), user)
+                    if (shopSync.cloudSynced) {
+                        syncedShopIdsInSession.add(parentShop.id)
+                    } else {
+                        parentShopError = shopSync
                     }
                 }
+
+                if (productToSave.id == 0L) {
+                    var result: CloudSaveResult<Long> = repository.addProduct(productToSave)
+                    if (!result.cloudSynced && result.requiresAuth && parentShop != null) {
+                        val shopImg = withContext(Dispatchers.IO) {
+                            com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), parentShop.imageUrl)
+                        }
+                        val targetShopUid = if (role == UserRole.SHOP_OWNER) firebaseUid else parentShop.ownerUid.ifBlank { firebaseUid }
+                        val shopSync = repository.updateShop(
+                            parentShop.copy(ownerUid = targetShopUid, imageUrl = shopImg),
+                            user
+                        )
+                        if (shopSync.cloudSynced) {
+                            syncedShopIdsInSession.add(parentShop.id)
+                            result = repository.updateProduct(productToSave.copy(id = result.localId))
+                                .let { upd -> CloudSaveResult(result.localId, upd.cloudSynced, upd.errorMessage, upd.requiresAuth) }
+                        } else if (parentShopError == null) {
+                            parentShopError = shopSync
+                        }
+                    }
+                    if (result.cloudSynced) {
+                        syncedShopIdsInSession.add(productToSave.shopId)
+                        _productSyncStatus.value = ProductSyncStatus.Synced("Saved & synced '${productToSave.name}' to Cloud Firestore ☁️")
+                        _userMessage.value = "Product added & synced to Cloud Firestore! ☁️"
+                    } else {
+                        val errMsg = parentShopError?.errorMessage ?: result.errorMessage ?: "Cloud Firestore sync failed."
+                        val reqAuth = parentShopError?.requiresAuth == true || result.requiresAuth
+                        android.util.Log.e(
+                            "MainViewModel",
+                            "addProduct Firestore sync failed (localId=${result.localId}, shopId=${productToSave.shopId}, uid=$firebaseUid, requiresAuth=$reqAuth): $errMsg"
+                        )
+                        _productSyncStatus.value = ProductSyncStatus.Error(errMsg, requiresAuth = reqAuth)
+                        _userMessage.value = "Saved locally only — cloud sync failed: $errMsg"
+                    }
+                } else {
+                    var result: CloudSaveResult<Unit> = repository.updateProduct(productToSave)
+                    if (!result.cloudSynced && result.requiresAuth && parentShop != null) {
+                        val shopImg = withContext(Dispatchers.IO) {
+                            com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), parentShop.imageUrl)
+                        }
+                        val targetShopUid = if (role == UserRole.SHOP_OWNER) firebaseUid else parentShop.ownerUid.ifBlank { firebaseUid }
+                        val shopSync = repository.updateShop(
+                            parentShop.copy(ownerUid = targetShopUid, imageUrl = shopImg),
+                            user
+                        )
+                        if (shopSync.cloudSynced) {
+                            syncedShopIdsInSession.add(parentShop.id)
+                            result = repository.updateProduct(productToSave)
+                        } else if (parentShopError == null) {
+                            parentShopError = shopSync
+                        }
+                    }
+                    if (result.cloudSynced) {
+                        syncedShopIdsInSession.add(productToSave.shopId)
+                        _productSyncStatus.value = ProductSyncStatus.Synced("Updated & synced '${productToSave.name}' to Cloud Firestore ☁️")
+                        _userMessage.value = "Product updated & synced to Cloud Firestore! ☁️"
+                    } else {
+                        val errMsg = parentShopError?.errorMessage ?: result.errorMessage ?: "Cloud Firestore sync failed."
+                        val reqAuth = parentShopError?.requiresAuth == true || result.requiresAuth
+                        android.util.Log.e(
+                            "MainViewModel",
+                            "updateProduct Firestore sync failed (productId=${productToSave.id}, shopId=${productToSave.shopId}, uid=$firebaseUid, requiresAuth=$reqAuth): $errMsg"
+                        )
+                        _productSyncStatus.value = ProductSyncStatus.Error(errMsg, requiresAuth = reqAuth)
+                        _userMessage.value = "Updated locally only — cloud sync failed: $errMsg"
+                    }
+                }
+            } finally {
+                _isProductSyncing.value = false
             }
         }
     }
@@ -760,23 +1095,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (role == UserRole.SHOP_OWNER) {
-            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
-            if (myShop == null || product.shopId != myShop.id) {
-                _userMessage.value = "Access Denied: You can only delete products from your own shop."
-                return
-            }
-        }
-
         viewModelScope.launch {
-            repository.deleteProduct(product)
-            _userMessage.value = "Product removed."
-            launch(Dispatchers.IO) {
-                try {
-                    FirestoreSyncService.deleteProductFromFirestore(product)
-                } catch (e: Throwable) {
-                    android.util.Log.w("MainViewModel", "Notice deleting product from cloud: ${e.message}")
+            _isProductSyncing.value = true
+            _productSyncStatus.value = ProductSyncStatus.Syncing
+            try {
+                if (role == UserRole.SHOP_OWNER) {
+                    val myShop = repository.getAllShopsSync().find {
+                        it.ownerId == user?.id ||
+                        (user?.shopId != null && it.id == user.shopId) ||
+                        (!user?.phone.isNullOrBlank() && it.phone == user?.phone)
+                    }
+                    if (myShop == null || product.shopId != myShop.id) {
+                        _productSyncStatus.value = ProductSyncStatus.Error("Access Denied: You can only delete products from your own shop.")
+                        _userMessage.value = "Access Denied: You can only delete products from your own shop."
+                        return@launch
+                    }
                 }
+                val result = repository.deleteProduct(product)
+                if (result.cloudSynced) {
+                    _productSyncStatus.value = ProductSyncStatus.Synced("Removed '${product.name}' from Cloud Firestore ☁️")
+                    _userMessage.value = "Product removed & synced with Cloud Firestore."
+                } else {
+                    val errMsg = result.errorMessage ?: "Could not delete product from Cloud Firestore."
+                    _productSyncStatus.value = ProductSyncStatus.Error(errMsg, requiresAuth = result.requiresAuth)
+                    _userMessage.value = "Removed locally — cloud sync error: $errMsg"
+                }
+            } finally {
+                _isProductSyncing.value = false
             }
         }
     }
@@ -785,23 +1130,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val role = currentRole.value
         val user = currentUser.value
 
-        if (role == UserRole.SHOP_OWNER) {
-            val myShop = allShops.value.find { it.ownerId == user?.id || (user?.shopId != null && it.id == user.shopId) }
-            if (myShop == null || product.shopId != myShop.id) {
-                _userMessage.value = "Access Denied: You can only update stock for your own shop."
-                return
-            }
+        if (role == UserRole.CUSTOMER) {
+            _userMessage.value = "Access Denied: Customers cannot modify products."
+            return
         }
 
         viewModelScope.launch {
-            val updated = product.copy(isAvailable = !product.isAvailable)
-            repository.updateProduct(updated)
-            launch(Dispatchers.IO) {
-                try {
-                    FirestoreSyncService.pushProductToFirestore(updated)
-                } catch (e: Throwable) {
-                    android.util.Log.w("MainViewModel", "Notice toggling stock in cloud: ${e.message}")
+            _isProductSyncing.value = true
+            try {
+                val shops = repository.getAllShopsSync()
+                if (role == UserRole.SHOP_OWNER) {
+                    val myShop = shops.find {
+                        it.ownerId == user?.id ||
+                        (user?.shopId != null && it.id == user.shopId) ||
+                        (!user?.phone.isNullOrBlank() && it.phone == user?.phone)
+                    }
+                    if (myShop == null || product.shopId != myShop.id) {
+                        _userMessage.value = "Access Denied: You can only update stock for your own shop."
+                        return@launch
+                    }
                 }
+                val firebaseUid = FirebasePhoneAuthHelper.currentUid()
+                if (firebaseUid.isNullOrBlank()) {
+                    val msg = "Please re-login with Mobile OTP so stock updates sync to Cloud Firestore."
+                    _productSyncStatus.value = ProductSyncStatus.Error(msg, requiresAuth = true)
+                    _userMessage.value = msg
+                    return@launch
+                }
+                val resolvedUid = if (role == UserRole.SHOP_OWNER) firebaseUid else product.ownerUid.ifBlank { firebaseUid }
+                val parentShop = shops.find { it.id == product.shopId }
+                var parentShopError: CloudSaveResult<Unit>? = null
+                if (parentShop != null && !syncedShopIdsInSession.contains(parentShop.id)) {
+                    val shopImg = withContext(Dispatchers.IO) {
+                        com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), parentShop.imageUrl)
+                    }
+                    val targetShopUid = if (role == UserRole.SHOP_OWNER) firebaseUid else parentShop.ownerUid.ifBlank { firebaseUid }
+                    val shopSync = repository.updateShop(parentShop.copy(ownerUid = targetShopUid, imageUrl = shopImg), user)
+                    if (shopSync.cloudSynced) {
+                        syncedShopIdsInSession.add(parentShop.id)
+                    } else {
+                        parentShopError = shopSync
+                    }
+                }
+                val updated = product.copy(isAvailable = !product.isAvailable, ownerUid = resolvedUid)
+                val result = repository.updateProduct(updated)
+                if (result.cloudSynced) {
+                    syncedShopIdsInSession.add(product.shopId)
+                    _productSyncStatus.value = ProductSyncStatus.Synced("Stock status synced ☁️")
+                } else {
+                    val errMsg = parentShopError?.errorMessage ?: result.errorMessage ?: "Stock update failed to sync to Cloud Firestore."
+                    val reqAuth = parentShopError?.requiresAuth == true || result.requiresAuth
+                    android.util.Log.e(
+                        "MainViewModel",
+                        "toggleProductStock Firestore sync failed (productId=${product.id}, shopId=${product.shopId}, uid=$firebaseUid): $errMsg"
+                    )
+                    _productSyncStatus.value = ProductSyncStatus.Error(errMsg, requiresAuth = reqAuth)
+                    _userMessage.value = "Stock updated locally only — cloud sync failed: $errMsg"
+                }
+            } finally {
+                _isProductSyncing.value = false
             }
         }
     }
@@ -998,7 +1385,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Role Authentication methods
-    // Shop Owner Authentication & Registration with Mobile & OTP
+    // Shop Owner Authentication & Registration with real Firebase Phone OTP
     private val _shopOwnerOtpMobile = MutableStateFlow("")
     val shopOwnerOtpMobile: StateFlow<String> = _shopOwnerOtpMobile.asStateFlow()
 
@@ -1020,57 +1407,198 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isRegisteringShop = MutableStateFlow(false)
     val isRegisteringShop: StateFlow<Boolean> = _isRegisteringShop.asStateFlow()
 
-    fun sendShopOwnerOtp(mobile: String): Boolean {
-        val trimmed = mobile.trim()
+    private var shopOwnerVerificationId: String? = null
+    private var shopOwnerResendToken: PhoneAuthProvider.ForceResendingToken? = null
+
+    fun sendShopOwnerOtp(mobile: String, activity: Activity?, onAutoSignIn: ((Boolean, Boolean, String) -> Unit)? = null): Boolean {
+        val trimmed = FirebasePhoneAuthHelper.extractTenDigitPhone(mobile)
         if (trimmed.length < 10) {
             _shopOwnerAuthError.value = "Please enter a valid 10-digit mobile number."
             return false
         }
+        if (activity == null) {
+            _shopOwnerAuthError.value = "Unable to start verification on this screen. Please reopen the login screen."
+            return false
+        }
 
         val allUsersList = allUsers.value
-        val registeredOwner = allUsersList.find { it.role == UserRole.SHOP_OWNER && (it.phone == trimmed || (it.email.isNotBlank() && it.email.equals(trimmed, ignoreCase = true))) }
-            ?: SeedData.shopOwners.find { it.phone == trimmed || it.email.equals(trimmed, ignoreCase = true) }
+        val registeredOwner = allUsersList.find {
+            it.role == UserRole.SHOP_OWNER &&
+                (FirebasePhoneAuthHelper.extractTenDigitPhone(it.phone) == trimmed ||
+                    (it.email.isNotBlank() && it.email.equals(mobile.trim(), ignoreCase = true)))
+        } ?: SeedData.shopOwners.find { FirebasePhoneAuthHelper.extractTenDigitPhone(it.phone) == trimmed }
 
-        val code = ((100000..999999).random()).toString()
         _shopOwnerOtpMobile.value = trimmed
-        _shopOwnerOtpCode.value = code
         _identifiedShopOwner.value = registeredOwner
         _isNewShopOwnerRegistration.value = (registeredOwner == null)
-        _isShopOwnerOtpSent.value = true
         _shopOwnerAuthError.value = null
+        _isAuthLoading.value = true
 
-        val modeText = if (registeredOwner != null) "Shop Owner Login" else "New Shop Owner Registration"
-        _userMessage.value = "$modeText OTP sent to $trimmed: $code (Use 123456 or $code)"
+        FirebasePhoneAuthHelper.sendOtp(
+            activity = activity,
+            rawPhone = mobile,
+            resendToken = shopOwnerResendToken,
+            onCodeSent = { verificationId, token ->
+                shopOwnerVerificationId = verificationId
+                shopOwnerResendToken = token
+                _isAuthLoading.value = false
+                _isShopOwnerOtpSent.value = true
+                _shopOwnerAuthError.value = null
+                _userMessage.value = "OTP sent via Firebase SMS to +91$trimmed"
+            },
+            onAutoVerified = { credential ->
+                viewModelScope.launch {
+                    val result = FirebasePhoneAuthHelper.signInWithPhoneCredential(credential)
+                    handleShopOwnerSignInResult(result) { success, needsReg, msg ->
+                        onAutoSignIn?.invoke(success, needsReg, msg)
+                    }
+                }
+            },
+            onFailed = { message ->
+                _isAuthLoading.value = false
+                _shopOwnerAuthError.value = message
+            }
+        )
         return true
     }
 
     fun verifyShopOwnerOtp(enteredCode: String, onResult: (Boolean, Boolean, String) -> Unit) {
-        val currentCode = _shopOwnerOtpCode.value
+        val verId = shopOwnerVerificationId
         val trimmed = enteredCode.trim()
-        if (currentCode != null && (trimmed == currentCode || trimmed == "123456")) {
-            val owner = _identifiedShopOwner.value ?: allUsers.value.find { it.role == UserRole.SHOP_OWNER && it.phone == _shopOwnerOtpMobile.value }
-                ?: SeedData.shopOwners.find { it.phone == _shopOwnerOtpMobile.value }
+        if (verId.isNullOrBlank()) {
+            _shopOwnerAuthError.value = "Verification session expired. Please tap Resend OTP."
+            onResult(false, false, "Session expired")
+            return
+        }
+        if (trimmed.length < 6) {
+            _shopOwnerAuthError.value = "Please enter the complete 6-digit SMS OTP."
+            onResult(false, false, "Invalid OTP length")
+            return
+        }
+        viewModelScope.launch {
+            _isAuthLoading.value = true
+            val result = FirebasePhoneAuthHelper.signInWithOtpCode(verId, trimmed)
+            handleShopOwnerSignInResult(result, onResult)
+        }
+    }
 
-            if (owner != null) {
-                // Existing shop owner: log in directly and persist session
-                authManager.persistShopOwnerSession(owner)
-                authManager.switchUser(owner)
-                authManager.switchRole(UserRole.SHOP_OWNER)
-                val myShop = allShops.value.find { it.ownerId == owner.id || (owner.shopId != null && it.id == owner.shopId) || (owner.phone.isNotBlank() && it.phone == owner.phone) }
-                resetShopOwnerOtpState()
-                screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
-                _currentScreen.value = Screen.ShopOwnerDashboard
-                _userMessage.value = "Welcome back, ${owner.name}! Accessing ${myShop?.name ?: "Shop Dashboard"}."
-                onResult(true, false, "Login successful")
-            } else {
-                // New shop owner: OTP verified, proceed to shop details registration!
-                _isNewShopOwnerRegistration.value = true
-                _shopOwnerAuthError.value = null
-                onResult(true, true, "OTP verified, proceed to shop registration")
+    private suspend fun handleShopOwnerSignInResult(
+        result: PhoneAuthSignInResult,
+        onResult: (Boolean, Boolean, String) -> Unit
+    ) {
+        when (result) {
+            is PhoneAuthSignInResult.Failure -> {
+                _isAuthLoading.value = false
+                _shopOwnerAuthError.value = result.message
+                onResult(false, false, result.message)
             }
-        } else {
-            _shopOwnerAuthError.value = "Invalid OTP code. Please enter the correct 6-digit OTP (or use 123456)."
-            onResult(false, false, "Invalid OTP code")
+            is PhoneAuthSignInResult.Success -> {
+                val firebaseUser: FirebaseUser = result.user
+                val uid = firebaseUser.uid
+                _currentFirebaseUid.value = uid
+                val normalizedPhone = FirebasePhoneAuthHelper.extractTenDigitPhone(
+                    firebaseUser.phoneNumber ?: _shopOwnerOtpMobile.value
+                )
+
+                // Check Firestore & Room for existing shop owner and shop
+                val remoteUser = FirestoreSyncService.fetchUserByUidFromFirestore(uid)
+                val remoteShop = FirestoreSyncService.fetchShopByOwnerUidFromFirestore(uid)
+                val localOwner = _identifiedShopOwner.value
+                    ?: repository.getUserByPhone(normalizedPhone)?.takeIf { it.role == UserRole.SHOP_OWNER }
+                    ?: allUsers.value.find {
+                        it.role == UserRole.SHOP_OWNER &&
+                            FirebasePhoneAuthHelper.extractTenDigitPhone(it.phone) == normalizedPhone
+                    }
+                    ?: SeedData.shopOwners.find {
+                        FirebasePhoneAuthHelper.extractTenDigitPhone(it.phone) == normalizedPhone
+                    }
+
+                if (remoteShop != null) {
+                    val shopWithUid = remoteShop.copy(ownerUid = uid)
+                    repository.insertOrUpdateShopFromCloud(shopWithUid)
+                    val baseOwner = localOwner ?: remoteUser ?: UserEntity(
+                        name = "Shop Owner",
+                        phone = normalizedPhone,
+                        role = UserRole.SHOP_OWNER,
+                        shopId = shopWithUid.id,
+                        isVerified = true,
+                        firebaseUid = uid
+                    )
+                    val syncedOwner = baseOwner.copy(
+                        role = UserRole.SHOP_OWNER,
+                        shopId = shopWithUid.id,
+                        isVerified = true,
+                        firebaseUid = uid
+                    )
+                    val ownerId = if (syncedOwner.id > 0L) {
+                        repository.updateUser(syncedOwner); syncedOwner.id
+                    } else {
+                        repository.insertUser(syncedOwner)
+                    }
+                    val finalOwner = syncedOwner.copy(id = ownerId)
+                    FirestoreSyncService.pushUserToFirestoreWithResult(finalOwner)
+
+                    authManager.persistShopOwnerSession(finalOwner)
+                    authManager.switchUser(finalOwner)
+                    authManager.switchRole(UserRole.SHOP_OWNER)
+                    attachRealtimeFirestoreListeners()
+                    syncShopsAndProductsFromCloud()
+                    resetShopOwnerOtpState()
+                    _isAuthLoading.value = false
+                    screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
+                    _currentScreen.value = Screen.ShopOwnerDashboard
+                    _userMessage.value = "Welcome back, ${finalOwner.name}! Accessing ${shopWithUid.name}."
+                    onResult(true, false, "Login successful")
+                } else if (localOwner != null) {
+                    val syncedOwner = localOwner.copy(
+                        role = UserRole.SHOP_OWNER,
+                        isVerified = true,
+                        firebaseUid = uid
+                    )
+                    val ownerId = if (syncedOwner.id > 0L) {
+                        repository.updateUser(syncedOwner); syncedOwner.id
+                    } else {
+                        repository.insertUser(syncedOwner)
+                    }
+                    val finalOwner = syncedOwner.copy(id = ownerId)
+                    val myShop = repository.getAllShopsSync().find {
+                        it.ownerId == finalOwner.id ||
+                            (finalOwner.shopId != null && it.id == finalOwner.shopId) ||
+                            (normalizedPhone.isNotBlank() && FirebasePhoneAuthHelper.extractTenDigitPhone(it.phone) == normalizedPhone)
+                    }
+                    if (myShop != null) {
+                        val shopSync = repository.updateShop(myShop.copy(ownerUid = uid), finalOwner)
+                        if (shopSync.cloudSynced) {
+                            syncedShopIdsInSession.add(myShop.id)
+                            _productSyncStatus.value = ProductSyncStatus.Synced("Shop '${myShop.name}' linked & synced to Cloud Firestore ☁️")
+                        } else {
+                            _productSyncStatus.value = ProductSyncStatus.Error(
+                                shopSync.errorMessage ?: "Could not sync shop to Cloud Firestore.",
+                                requiresAuth = shopSync.requiresAuth
+                            )
+                        }
+                    }
+                    FirestoreSyncService.pushUserToFirestoreWithResult(finalOwner)
+
+                    authManager.persistShopOwnerSession(finalOwner)
+                    authManager.switchUser(finalOwner)
+                    authManager.switchRole(UserRole.SHOP_OWNER)
+                    attachRealtimeFirestoreListeners()
+                    syncShopsAndProductsFromCloud()
+                    resetShopOwnerOtpState()
+                    _isAuthLoading.value = false
+                    screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
+                    _currentScreen.value = Screen.ShopOwnerDashboard
+                    _userMessage.value = "Welcome back, ${finalOwner.name}! Accessing ${myShop?.name ?: "Shop Dashboard"}."
+                    onResult(true, false, "Login successful")
+                } else {
+                    _isAuthLoading.value = false
+                    _isNewShopOwnerRegistration.value = true
+                    _shopOwnerAuthError.value = null
+                    attachRealtimeFirestoreListeners()
+                    onResult(true, true, "OTP verified, proceed to shop registration")
+                }
+            }
         }
     }
 
@@ -1092,10 +1620,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val firebaseUid = FirebasePhoneAuthHelper.currentUid()
+        if (firebaseUid.isNullOrBlank()) {
+            val msg = "Mobile OTP verification session expired. Please verify your mobile number with OTP again."
+            _shopOwnerAuthError.value = msg
+            onComplete(false, msg)
+            return
+        }
+
         viewModelScope.launch {
             _isRegisteringShop.value = true
             try {
-                // 1. Create separate Shop Owner user
+                // 1. Create Shop Owner user linked with Firebase Auth UID
                 val newOwner = UserEntity(
                     id = 0L,
                     name = ownerName.trim(),
@@ -1107,12 +1643,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     district = "Nuapada",
                     block = "Sinapali",
                     gp = "Sinapali",
-                    village = "Sinapali"
+                    village = "Sinapali",
+                    firebaseUid = firebaseUid
                 )
                 val newOwnerId = repository.insertUser(newOwner)
                 val persistedOwner = newOwner.copy(id = newOwnerId)
 
-                // 2. Create ShopEntity linked to owner
+                // 2. Create ShopEntity linked to owner and Firebase Auth UID
+                val universalShopImage = withContext(Dispatchers.IO) {
+                    com.example.util.ImageStorageHelper.toUniversalImageUrl(
+                        getApplication(),
+                        imageUrl.trim().ifBlank { "hero_local_mart" }
+                    )
+                }
                 val newShop = ShopEntity(
                     id = 0L,
                     ownerId = newOwnerId,
@@ -1121,41 +1664,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     address = address.trim().ifBlank { "Sinapali Main Market" },
                     phone = phone.trim(),
                     upiId = upiId.trim().ifBlank { "${phone.trim()}@upi" },
-                    imageUrl = com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), imageUrl.trim().ifBlank { "hero_local_mart" }),
+                    imageUrl = universalShopImage,
                     deliveryAvailable = deliveryAvailable,
                     isOpen = true,
                     isApproved = true,
                     rating = 5.0,
                     reviewCount = 1,
                     minOrderAmount = 40.0,
-                    estimatedDeliveryMins = 25
+                    estimatedDeliveryMins = 25,
+                    ownerUid = firebaseUid
                 )
-                val newShopId = repository.createShop(newShop)
-                val persistedShop = newShop.copy(id = newShopId)
+                val shopCreateResult = repository.createShop(newShop, persistedOwner)
+                val persistedShop = newShop.copy(id = shopCreateResult.localId)
 
                 // Update owner's shopId
-                val updatedOwner = persistedOwner.copy(shopId = newShopId)
+                val updatedOwner = persistedOwner.copy(shopId = shopCreateResult.localId)
                 repository.updateUser(updatedOwner)
 
-                // 3. Save both Shop and Owner to Firebase Firestore securely
-                launch(Dispatchers.IO) {
-                    try {
-                        FirestoreSyncService.pushShopToFirestore(persistedShop, updatedOwner)
-                        FirestoreSyncService.pushUserToFirestore(updatedOwner)
-                    } catch (e: Throwable) {
-                        android.util.Log.w("MainViewModel", "Notice: Firestore shop push: ${e.message}")
-                    }
+                // 3. Push owner user profile directly to Cloud Firestore /users/{uid}
+                val userSyncResult = FirestoreSyncService.pushUserToFirestoreWithResult(updatedOwner)
+
+                // 4. Update honest cloud sync status
+                if (shopCreateResult.cloudSynced) {
+                    syncedShopIdsInSession.add(persistedShop.id)
+                }
+                if (shopCreateResult.cloudSynced && userSyncResult is FirestoreSyncService.CloudSyncResult.Success) {
+                    _productSyncStatus.value = ProductSyncStatus.Synced("Shop '${persistedShop.name}' synced to Cloud Firestore ☁️")
+                } else {
+                    val syncMsg = shopCreateResult.errorMessage
+                        ?: (userSyncResult as? FirestoreSyncService.CloudSyncResult.Failure)?.userMessage
+                        ?: "Shop saved locally, but Cloud Firestore sync failed."
+                    _productSyncStatus.value = ProductSyncStatus.Error(syncMsg, requiresAuth = shopCreateResult.requiresAuth)
                 }
 
-                // 4. Switch session to the newly created Shop Owner and persist session
+                // 5. Switch session to the newly created Shop Owner and persist session
                 authManager.persistShopOwnerSession(updatedOwner)
                 authManager.switchUser(updatedOwner)
                 authManager.switchRole(UserRole.SHOP_OWNER)
+                attachRealtimeFirestoreListeners()
                 resetShopOwnerOtpState()
 
                 screenBackStack.removeAll { it is Screen.ShopOwnerAuth || it is Screen.CustomerAuth }
                 _currentScreen.value = Screen.ShopOwnerDashboard
-                _userMessage.value = "Shop '${persistedShop.name}' registered successfully! Welcome, ${updatedOwner.name}."
+                _userMessage.value = if (shopCreateResult.cloudSynced) {
+                    "Shop '${persistedShop.name}' registered & synced to Cloud Firestore! ☁️"
+                } else {
+                    "Shop saved locally. Cloud sync pending: ${shopCreateResult.errorMessage}"
+                }
                 onComplete(true, "Shop created successfully")
             } catch (e: Throwable) {
                 _shopOwnerAuthError.value = "Failed to register shop: ${e.message}"
@@ -1174,6 +1729,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _identifiedShopOwner.value = null
         _isNewShopOwnerRegistration.value = false
         _isRegisteringShop.value = false
+        _isAuthLoading.value = false
+        shopOwnerVerificationId = null
     }
 
     fun loginShopOwnerWithCredentials(phoneOrEmail: String, onResult: (Boolean, String) -> Unit) {
@@ -1241,7 +1798,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _userMessage.value = null
     }
 
-    // OTP and Customer Registration state
+    // OTP and Customer Registration state (real Firebase Phone OTP)
     private val _otpTarget = MutableStateFlow("")
     val otpTarget: StateFlow<String> = _otpTarget.asStateFlow()
 
@@ -1257,29 +1814,112 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _authErrorMessage = MutableStateFlow<String?>(null)
     val authErrorMessage: StateFlow<String?> = _authErrorMessage.asStateFlow()
 
-    fun sendCustomerOtp(target: String, isEmail: Boolean): String {
-        val trimmed = target.trim()
-        val code = ((100000..999999).random()).toString()
-        _otpTarget.value = trimmed
-        _otpCode.value = code
-        _isOtpSent.value = true
+    private var customerVerificationId: String? = null
+    private var customerResendToken: PhoneAuthProvider.ForceResendingToken? = null
+
+    fun sendCustomerOtp(mobile: String, activity: Activity?, onAutoVerifiedUser: ((UserEntity?) -> Unit)? = null) {
+        val digits = FirebasePhoneAuthHelper.extractTenDigitPhone(mobile)
+        if (digits.length < 10) {
+            _authErrorMessage.value = "Please enter a valid 10-digit mobile number."
+            return
+        }
+        if (activity == null) {
+            _authErrorMessage.value = "Unable to start OTP verification on this screen."
+            return
+        }
+
+        _otpTarget.value = digits
         _isOtpVerified.value = false
         _authErrorMessage.value = null
-        val channel = if (isEmail) "Email ($trimmed)" else "Mobile ($trimmed)"
-        _userMessage.value = "OTP sent to $channel: $code"
-        return code
+        _isAuthLoading.value = true
+
+        FirebasePhoneAuthHelper.sendOtp(
+            activity = activity,
+            rawPhone = mobile,
+            resendToken = customerResendToken,
+            onCodeSent = { verificationId, token ->
+                customerVerificationId = verificationId
+                customerResendToken = token
+                _isAuthLoading.value = false
+                _isOtpSent.value = true
+                _authErrorMessage.value = null
+                _userMessage.value = "SMS OTP sent via Firebase to +91$digits"
+            },
+            onAutoVerified = { credential ->
+                viewModelScope.launch {
+                    val result = FirebasePhoneAuthHelper.signInWithPhoneCredential(credential)
+                    handleCustomerSignInResult(result) { success, existingCustomer, _ ->
+                        if (success) {
+                            onAutoVerifiedUser?.invoke(existingCustomer)
+                        }
+                    }
+                }
+            },
+            onFailed = { message ->
+                _isAuthLoading.value = false
+                _authErrorMessage.value = message
+            }
+        )
     }
 
-    fun verifyCustomerOtp(enteredCode: String): Boolean {
-        val currentCode = _otpCode.value
+    fun verifyCustomerOtp(
+        enteredCode: String,
+        onResult: (Boolean, UserEntity?, String?) -> Unit
+    ) {
+        val verId = customerVerificationId
         val trimmed = enteredCode.trim()
-        return if (currentCode != null && (trimmed == currentCode || trimmed == "123456")) {
-            _isOtpVerified.value = true
-            _authErrorMessage.value = null
-            true
-        } else {
-            _authErrorMessage.value = "Invalid OTP code. Please enter the correct 6-digit OTP."
-            false
+        if (verId.isNullOrBlank()) {
+            _authErrorMessage.value = "Verification session expired. Please tap Resend OTP."
+            onResult(false, null, "Session expired")
+            return
+        }
+        if (trimmed.length < 6) {
+            _authErrorMessage.value = "Please enter the complete 6-digit SMS OTP."
+            onResult(false, null, "Invalid OTP length")
+            return
+        }
+        viewModelScope.launch {
+            _isAuthLoading.value = true
+            val result = FirebasePhoneAuthHelper.signInWithOtpCode(verId, trimmed)
+            handleCustomerSignInResult(result, onResult)
+        }
+    }
+
+    private suspend fun handleCustomerSignInResult(
+        result: PhoneAuthSignInResult,
+        onResult: (Boolean, UserEntity?, String?) -> Unit
+    ) {
+        when (result) {
+            is PhoneAuthSignInResult.Failure -> {
+                _isAuthLoading.value = false
+                _authErrorMessage.value = result.message
+                onResult(false, null, result.message)
+            }
+            is PhoneAuthSignInResult.Success -> {
+                val firebaseUser = result.user
+                val uid = firebaseUser.uid
+                _currentFirebaseUid.value = uid
+                val normalizedPhone = FirebasePhoneAuthHelper.extractTenDigitPhone(
+                    firebaseUser.phoneNumber ?: _otpTarget.value
+                )
+                val remoteUser = FirestoreSyncService.fetchUserByUidFromFirestore(uid)
+                val localUser = repository.getUserByPhoneOrEmail(normalizedPhone)?.takeIf { it.role == UserRole.CUSTOMER }
+                val existing = (remoteUser ?: localUser)?.copy(
+                    firebaseUid = uid,
+                    isVerified = true,
+                    phone = normalizedPhone.ifBlank { (remoteUser ?: localUser)?.phone ?: "" }
+                )
+                if (existing != null && existing.id == 0L && localUser != null) {
+                    // keep Room ID
+                    val merged = existing.copy(id = localUser.id)
+                    repository.updateUser(merged)
+                }
+                _isOtpVerified.value = true
+                _authErrorMessage.value = null
+                _isAuthLoading.value = false
+                attachRealtimeFirestoreListeners()
+                onResult(true, existing, null)
+            }
         }
     }
 
@@ -1289,6 +1929,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isOtpSent.value = false
         _isOtpVerified.value = false
         _authErrorMessage.value = null
+        _isAuthLoading.value = false
+        customerVerificationId = null
     }
 
     suspend fun checkCustomerExists(identifier: String): UserEntity? {
@@ -1296,15 +1938,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loginCustomerWithVerifiedOtp(user: UserEntity, onSuccess: () -> Unit) {
-        val verified = user.copy(isVerified = true)
-        authManager.loginExistingCustomer(verified)
+        val uid = FirebasePhoneAuthHelper.currentUid() ?: user.firebaseUid
+        val verified = user.copy(isVerified = true, firebaseUid = uid)
         viewModelScope.launch {
-            repository.updateUser(verified)
+            val savedId = if (verified.id > 0L) {
+                repository.updateUser(verified)
+                verified.id
+            } else {
+                repository.insertUser(verified)
+            }
+            val finalUser = verified.copy(id = savedId)
+            authManager.loginExistingCustomer(finalUser)
+            FirestoreSyncService.pushUserToFirestoreWithResult(finalUser)
+            resetCustomerOtpState()
+            screenBackStack.removeAll { it is Screen.CustomerAuth }
+            _userMessage.value = "Welcome back, ${finalUser.name}!"
+            onSuccess()
         }
-        resetCustomerOtpState()
-        screenBackStack.removeAll { it is Screen.CustomerAuth }
-        _userMessage.value = "Welcome back, ${verified.name}!"
-        onSuccess()
     }
 
     fun registerCustomerWithOdishaAddress(
@@ -1319,6 +1969,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
+            val uid = FirebasePhoneAuthHelper.currentUid() ?: ""
             val user = authManager.registerCustomerWithOdishaAddress(
                 name = name,
                 phone = phone,
@@ -1327,8 +1978,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 block = block,
                 gp = gp,
                 village = village,
-                fullAddress = fullAddress
+                fullAddress = fullAddress,
+                firebaseUid = uid
             )
+            FirestoreSyncService.pushUserToFirestoreWithResult(user)
             resetCustomerOtpState()
             screenBackStack.removeAll { it is Screen.CustomerAuth }
             _userMessage.value = "Registration complete! Odisha address saved."
@@ -1381,8 +2034,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val shop = repository.getShopByIdSync(shopId)
             if (shop != null) {
-                repository.updateShop(shop.copy(imageUrl = photoUri))
-                _userMessage.value = "Shop photo updated! 🏪"
+                val universalUrl = withContext(Dispatchers.IO) {
+                    com.example.util.ImageStorageHelper.toUniversalImageUrl(getApplication(), photoUri)
+                }
+                val result = repository.updateShop(shop.copy(imageUrl = universalUrl), currentUser.value)
+                _userMessage.value = if (result.cloudSynced) {
+                    "Shop photo updated & synced! 🏪"
+                } else {
+                    "Shop photo saved locally (cloud sync pending: ${result.errorMessage ?: "Sign in required"})"
+                }
             }
         }
     }

@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 var showPortalSwitcher by remember { mutableStateOf(false) }
-                var portalTab by remember { mutableStateOf(0) }
+                var portalTab by remember { mutableIntStateOf(0) }
                 var shopPhoneInput by remember { mutableStateOf("9437012345") }
                 var adminPinInput by remember { mutableStateOf("") }
                 var portalError by remember { mutableStateOf<String?>(null) }
@@ -225,7 +225,7 @@ class MainActivity : ComponentActivity() {
 
                             // Shop Owner Screens: Strictly restricted to UserRole.SHOP_OWNER
                             is Screen.ShopOwnerAuth -> {
-                                if (viewModel.authManager.isShopOwnerSessionActive()) {
+                                if (viewModel.authManager.isShopOwnerFirebaseSessionValid()) {
                                     LaunchedEffect(Unit) {
                                         viewModel.authManager.restoreShopOwnerSession()
                                         viewModel.navigateTo(Screen.ShopOwnerDashboard)
@@ -526,54 +526,72 @@ class MainActivity : ComponentActivity() {
 
                                             if (portalTab == 0) {
                                                 val isOtpSent by viewModel.isShopOwnerOtpSent.collectAsState()
-                                                val otpCode by viewModel.shopOwnerOtpCode.collectAsState()
+                                                val isAuthLoading by viewModel.isAuthLoading.collectAsState()
+                                                val shopAuthError by viewModel.shopOwnerAuthError.collectAsState()
                                                 var inlineOtp by remember { mutableStateOf("") }
                                                 val isShopOwnerSessionActive = viewModel.authManager.isShopOwnerSessionActive()
+                                                val currentFirebaseUid = com.example.service.FirebasePhoneAuthHelper.currentUid()
 
                                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                    if (isShopOwnerSessionActive) {
-                                                        val savedOwner = viewModel.authManager.getActiveShopOwner()
-                                                        val mySavedShop = allShops.find { it.ownerId == savedOwner?.id || (savedOwner?.shopId != null && it.id == savedOwner.shopId) || (savedOwner?.phone?.isNotBlank() == true && it.phone == savedOwner.phone) }
-                                                        Surface(
-                                                            color = Color(0xFFFFF3E0),
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            border = BorderStroke(1.dp, Color(0xFFFF9800)),
-                                                            modifier = Modifier.fillMaxWidth()
-                                                        ) {
-                                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                                Text("Active Authenticated Shop Owner Session:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFBF360C))
-                                                                Text("${savedOwner?.name ?: "Shop Owner"} • ${mySavedShop?.name ?: "My Shop"}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                                                Text("Mobile: ${savedOwner?.phone ?: ""}", fontSize = 11.sp, color = Color.DarkGray)
-                                                                Button(
-                                                                    onClick = {
-                                                                        viewModel.authManager.restoreShopOwnerSession()
-                                                                        viewModel.navigateTo(Screen.ShopOwnerDashboard)
-                                                                        showPortalSwitcher = false
-                                                                    },
-                                                                    modifier = Modifier.fillMaxWidth(),
-                                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
-                                                                ) {
-                                                                    Icon(Icons.Default.Storefront, contentDescription = null)
-                                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                                    Text("Open My Shop Dashboard (No OTP)")
-                                                                }
-                                                                OutlinedButton(
-                                                                    onClick = {
-                                                                        viewModel.logoutShopOwner()
-                                                                    },
-                                                                    modifier = Modifier.fillMaxWidth()
-                                                                ) {
-                                                                    Icon(Icons.Default.Logout, contentDescription = null)
-                                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                                    Text("Log Out this Shop Account", fontSize = 11.sp)
-                                                                }
-                                                            }
-                                                        }
+                                                     if (isShopOwnerSessionActive) {
+                                                         val savedOwner = viewModel.authManager.getActiveShopOwner()
+                                                         val isFirebaseUidMatching = !currentFirebaseUid.isNullOrBlank() &&
+                                                             (savedOwner?.firebaseUid.isNullOrBlank() || savedOwner?.firebaseUid == currentFirebaseUid)
+                                                         val mySavedShop = allShops.find { it.ownerId == savedOwner?.id || (savedOwner?.shopId != null && it.id == savedOwner.shopId) || (savedOwner?.phone?.isNotBlank() == true && it.phone == savedOwner.phone) }
+                                                         Surface(
+                                                             color = Color(0xFFFFF3E0),
+                                                             shape = RoundedCornerShape(10.dp),
+                                                             border = BorderStroke(1.dp, Color(0xFFFF9800)),
+                                                             modifier = Modifier.fillMaxWidth()
+                                                         ) {
+                                                             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                                 Text(
+                                                                     if (isFirebaseUidMatching) "Active Authenticated Shop Owner Session:"
+                                                                     else "OTP Re-Verification Needed for Cloud Sync:",
+                                                                     fontWeight = FontWeight.Bold,
+                                                                     fontSize = 12.sp,
+                                                                     color = Color(0xFFBF360C)
+                                                                 )
+                                                                 Text("${savedOwner?.name ?: "Shop Owner"} • ${mySavedShop?.name ?: "My Shop"}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                                                 Text("Mobile: ${savedOwner?.phone ?: ""}", fontSize = 11.sp, color = Color.DarkGray)
+                                                                 if (isFirebaseUidMatching) {
+                                                                     Button(
+                                                                         onClick = {
+                                                                             viewModel.authManager.restoreShopOwnerSession()
+                                                                             viewModel.navigateTo(Screen.ShopOwnerDashboard)
+                                                                             showPortalSwitcher = false
+                                                                         },
+                                                                         modifier = Modifier.fillMaxWidth(),
+                                                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                                                     ) {
+                                                                         Icon(Icons.Default.Storefront, contentDescription = null)
+                                                                         Spacer(modifier = Modifier.width(6.dp))
+                                                                         Text("Open My Shop Dashboard (No OTP)")
+                                                                     }
+                                                                 } else {
+                                                                     Text(
+                                                                         "Your Firebase OTP session changed or expired. Enter OTP below or tap Re-verify to sync products to Cloud Firestore.",
+                                                                         fontSize = 11.sp,
+                                                                         color = Color(0xFFB71C1C)
+                                                                     )
+                                                                 }
+                                                                 OutlinedButton(
+                                                                     onClick = {
+                                                                         viewModel.logoutShopOwner()
+                                                                     },
+                                                                     modifier = Modifier.fillMaxWidth()
+                                                                 ) {
+                                                                     Icon(Icons.Default.Logout, contentDescription = null)
+                                                                     Spacer(modifier = Modifier.width(6.dp))
+                                                                     Text("Log Out this Shop Account", fontSize = 11.sp)
+                                                                 }
+                                                             }
+                                                         }
                                                         HorizontalDivider()
                                                         Text("Or verify another Shop Owner mobile number with OTP:", fontSize = 11.sp)
                                                     } else {
                                                         Text(
-                                                            "Enter registered Shop Owner mobile number (e.g. Ramesh Sahu 9437012345, Santosh Meher 9437054321):",
+                                                            "Enter Shop Owner 10-digit mobile number to verify with Firebase SMS OTP:",
                                                             fontSize = 11.sp
                                                         )
                                                     }
@@ -581,7 +599,7 @@ class MainActivity : ComponentActivity() {
                                                         value = shopPhoneInput,
                                                         onValueChange = {
                                                             if (!isOtpSent) {
-                                                                shopPhoneInput = it
+                                                                shopPhoneInput = it.filter { ch -> ch.isDigit() }.take(10)
                                                                 portalError = null
                                                             }
                                                         },
@@ -592,42 +610,55 @@ class MainActivity : ComponentActivity() {
                                                         singleLine = true
                                                     )
 
+                                                    val activeErr = portalError ?: shopAuthError
+                                                    if (!activeErr.isNullOrBlank()) {
+                                                        Text(activeErr, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                                    }
+
                                                     if (!isOtpSent) {
                                                         Button(
                                                             onClick = {
-                                                                val ok = viewModel.sendShopOwnerOtp(shopPhoneInput)
-                                                                if (!ok) {
+                                                                portalError = null
+                                                                val started = viewModel.sendShopOwnerOtp(shopPhoneInput, this@MainActivity) { success, needsReg, msg ->
+                                                                    if (success) {
+                                                                        showPortalSwitcher = false
+                                                                        inlineOtp = ""
+                                                                        if (needsReg) {
+                                                                            viewModel.navigateTo(Screen.ShopOwnerAuth)
+                                                                        }
+                                                                    } else {
+                                                                        portalError = msg
+                                                                    }
+                                                                }
+                                                                if (!started) {
                                                                     portalError = viewModel.shopOwnerAuthError.value
                                                                 }
                                                             },
+                                                            enabled = !isAuthLoading && shopPhoneInput.filter { it.isDigit() }.length >= 10,
                                                             modifier = Modifier.fillMaxWidth(),
                                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                                                         ) {
-                                                            Icon(Icons.Default.SendToMobile, contentDescription = null)
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Text("Send Verification OTP")
-                                                        }
-                                                    } else {
-                                                        otpCode?.let { code ->
-                                                            Surface(
-                                                                color = Color(0xFFE8F5E9),
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                modifier = Modifier.fillMaxWidth()
-                                                            ) {
-                                                                Text(
-                                                                    "Demo OTP: $code (or 123456)",
-                                                                    color = Color(0xFF2E7D32),
-                                                                    fontSize = 12.sp,
-                                                                    fontWeight = FontWeight.Bold,
-                                                                    modifier = Modifier.padding(8.dp)
-                                                                )
+                                                            if (isAuthLoading) {
+                                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Text("Sending OTP...")
+                                                            } else {
+                                                                Icon(Icons.Default.SendToMobile, contentDescription = null)
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Text("Send Verification OTP")
                                                             }
                                                         }
+                                                    } else {
+                                                        Text(
+                                                            "SMS OTP sent via Firebase to +91${shopPhoneInput.filter { it.isDigit() }.takeLast(10)}",
+                                                            fontSize = 11.sp,
+                                                            color = Color(0xFF2E7D32)
+                                                        )
 
                                                         OutlinedTextField(
                                                             value = inlineOtp,
-                                                            onValueChange = { inlineOtp = it.take(6) },
-                                                            label = { Text("Enter 6-digit OTP") },
+                                                            onValueChange = { inlineOtp = it.filter { ch -> ch.isDigit() }.take(6) },
+                                                            label = { Text("Enter 6-digit SMS OTP") },
                                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                             modifier = Modifier.fillMaxWidth(),
                                                             singleLine = true
@@ -635,21 +666,32 @@ class MainActivity : ComponentActivity() {
 
                                                         Button(
                                                             onClick = {
-                                                                viewModel.verifyShopOwnerOtp(inlineOtp) { success, _, msg ->
+                                                                portalError = null
+                                                                viewModel.verifyShopOwnerOtp(inlineOtp) { success, needsReg, msg ->
                                                                     if (success) {
                                                                         showPortalSwitcher = false
                                                                         inlineOtp = ""
+                                                                        if (needsReg) {
+                                                                            viewModel.navigateTo(Screen.ShopOwnerAuth)
+                                                                        }
                                                                     } else {
                                                                         portalError = msg
                                                                     }
                                                                 }
                                                             },
+                                                            enabled = !isAuthLoading && inlineOtp.length == 6,
                                                             modifier = Modifier.fillMaxWidth(),
                                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                                                         ) {
-                                                            Icon(Icons.Default.VerifiedUser, contentDescription = null)
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Text("Verify OTP & Open Shop")
+                                                            if (isAuthLoading) {
+                                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Text("Verifying...")
+                                                            } else {
+                                                                Icon(Icons.Default.VerifiedUser, contentDescription = null)
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Text("Verify OTP & Open Shop")
+                                                            }
                                                         }
                                                     }
 

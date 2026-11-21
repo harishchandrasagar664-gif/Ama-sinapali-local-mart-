@@ -15,9 +15,13 @@ import com.example.domain.model.UserRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.android.gms.tasks.Tasks
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
@@ -41,11 +45,38 @@ object FirestoreSyncService {
 
     enum class FirebaseConnectionState {
         CONNECTED,
+        PERMISSION_DENIED,
         VERIFIED_AUTH_REQUIRED,
         NOT_CONFIGURED,
         UNREACHABLE,
         PROJECT_NOT_FOUND
     }
+
+    enum class OperationType(val value: String) {
+        CREATE("create"),
+        UPDATE("update"),
+        DELETE("delete"),
+        LIST("list"),
+        GET("get"),
+        WRITE("write")
+    }
+
+    sealed class CloudSyncResult<out T> {
+        data class Success<T>(val data: T) : CloudSyncResult<T>()
+        data class Failure(
+            val errorCode: String,
+            val userMessage: String,
+            val isAuthOrPermissionError: Boolean = false
+        ) : CloudSyncResult<Nothing>()
+    }
+
+    data class ShopAndProductSyncReport(
+        val success: Boolean,
+        val syncedShopsCount: Int,
+        val syncedProductsCount: Int,
+        val errorMessage: String? = null,
+        val isAuthOrPermissionError: Boolean = false
+    )
 
     data class FirebaseVerificationReport(
         val isConnected: Boolean,
@@ -57,6 +88,8 @@ object FirestoreSyncService {
         val hasGoogleServicesJson: Boolean = false,
         val isRealGoogleCloudProject: Boolean = false,
         val isMockSyncPrevented: Boolean = true,
+        val isUserAuthenticated: Boolean = false,
+        val authenticatedUid: String? = null,
         val timestamp: Long = System.currentTimeMillis()
     )
 
@@ -66,15 +99,95 @@ object FirestoreSyncService {
         val downloadedOrdersCount: Int,
         val totalLocalOrdersPreserved: Int,
         val message: String,
+        val errorMessage: String? = null,
         val timestamp: Long = System.currentTimeMillis()
     )
 
+    private fun currentFirebaseUser() = try {
+        FirebaseApp.getInstance()
+        FirebaseAuth.getInstance().currentUser
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun currentUidOrNull(): String? = currentFirebaseUser()?.uid?.takeIf { it.isNotBlank() }
+
+    private fun firestoreOrNull(): FirebaseFirestore? = try {
+        FirebaseApp.getInstance()
+        FirebaseFirestore.getInstance()
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun fetchCurrentIdTokenSync(): String? {
+        return try {
+            val user = currentFirebaseUser() ?: return null
+            val tokenResult = Tasks.await(user.getIdToken(false), 3, TimeUnit.SECONDS)
+            tokenResult?.token
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun handleFirestoreError(exception: Throwable, operationType: OperationType, path: String?): String {
+        val causes = generateSequence(exception) { it.cause }
+        val rootError = causes.firstOrNull { it is FirebaseFirestoreException }
+            ?: causes.firstOrNull { it !is CancellationException }
+            ?: exception
+
+        val currentUser = currentFirebaseUser()
+        val providerInfoList = currentUser?.providerData?.map { provider ->
+            JSONObject().apply {
+                put("providerId", provider.providerId)
+                put("phoneNumber", provider.phoneNumber)
+            }
+        } ?: emptyList()
+
+        val authInfoJson = JSONObject().apply {
+            put("userId", currentUser?.uid)
+            put("phoneNumber", currentUser?.phoneNumber)
+            put("providerInfo", JSONArray(providerInfoList))
+        }
+
+        val errorInfoJson = JSONObject().apply {
+            put("error", rootError.message ?: rootError.toString())
+            put("operationType", operationType.value)
+            put("path", path)
+            put("authInfo", authInfoJson)
+        }
+
+        val jsonString = errorInfoJson.toString()
+        Log.e("FirestoreError", "Firestore Error: $jsonString")
+
+        return when (rootError) {
+            is FirebaseFirestoreException -> when (rootError.code) {
+                FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                    "Permission denied by Firestore rules. Ensure you are logged in with your shop owner OTP and own this shop."
+                FirebaseFirestoreException.Code.UNAUTHENTICATED ->
+                    "Authentication required. Please log in with Mobile OTP and try again."
+                FirebaseFirestoreException.Code.UNAVAILABLE ->
+                    "Firestore temporarily unavailable. Check your internet connection."
+                else -> rootError.localizedMessage ?: "Cloud Firestore sync failed."
+            }
+            else -> rootError.localizedMessage ?: "Cloud Firestore sync failed."
+        }
+    }
+
+    private fun isAuthOrPermException(exception: Throwable): Boolean {
+        val causes = generateSequence(exception) { it.cause }
+        val fsEx = causes.filterIsInstance<FirebaseFirestoreException>().firstOrNull()
+        return fsEx?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ||
+            fsEx?.code == FirebaseFirestoreException.Code.UNAUTHENTICATED
+    }
+
     /**
      * Actively tests the Firebase Firestore connection against the real Google Cloud endpoint.
-     * Guaranteed: Performs real network verification. No simulated or mock responses.
+     * Tests rule-aligned public product query (isApproved == true && isAvailable == true).
+     * Never reports HTTP 403 or PERMISSION_DENIED as connected.
      */
     suspend fun verifyFirebaseConnection(): FirebaseVerificationReport = withContext(Dispatchers.IO) {
         val projectId = FirebaseSyncConfig.FIREBASE_PROJECT_ID.trim()
+        val authUser = currentFirebaseUser()
 
         if (projectId.isBlank() || projectId == "placeholder") {
             return@withContext FirebaseVerificationReport(
@@ -83,28 +196,71 @@ object FirestoreSyncService {
                 projectId = if (projectId.isBlank()) "None (Not Configured)" else projectId,
                 httpStatusCode = 0,
                 statusMessage = "Firebase project is not configured. Please enter a valid Project ID.",
-                firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
+                firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
                 hasGoogleServicesJson = false,
-                isRealGoogleCloudProject = false
+                isRealGoogleCloudProject = false,
+                isUserAuthenticated = authUser != null,
+                authenticatedUid = authUser?.uid
             )
         }
 
         try {
-            val url = URL(FirebaseSyncConfig.FIRESTORE_ORDERS_URL)
+            val idToken = fetchCurrentIdTokenSync()
+            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
+            val runQueryUrl = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}:runQuery$keyParam"
+
+            // Rule-aligned structured query matching public product read policy
+            val structuredQuery = JSONObject().apply {
+                put("structuredQuery", JSONObject().apply {
+                    put("from", JSONArray().put(JSONObject().put("collectionId", FirebaseSyncConfig.COLLECTION_PRODUCTS)))
+                    put("where", JSONObject().apply {
+                        put("compositeFilter", JSONObject().apply {
+                            put("op", "AND")
+                            put("filters", JSONArray()
+                                .put(JSONObject().apply {
+                                    put("fieldFilter", JSONObject().apply {
+                                        put("field", JSONObject().put("fieldPath", "isApproved"))
+                                        put("op", "EQUAL")
+                                        put("value", JSONObject().put("booleanValue", true))
+                                    })
+                                })
+                                .put(JSONObject().apply {
+                                    put("fieldFilter", JSONObject().apply {
+                                        put("field", JSONObject().put("fieldPath", "isAvailable"))
+                                        put("op", "EQUAL")
+                                        put("value", JSONObject().put("booleanValue", true))
+                                    })
+                                })
+                            )
+                        })
+                    })
+                    put("limit", 1)
+                })
+            }
+
+            val url = URL(runQueryUrl)
             val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
+            conn.requestMethod = "POST"
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
-            val code = conn.responseCode
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            if (!idToken.isNullOrBlank()) {
+                conn.setRequestProperty("Authorization", "Bearer $idToken")
+            }
 
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(structuredQuery.toString())
+                writer.flush()
+            }
+
+            val code = conn.responseCode
             val responseBody = try {
                 if (code in 200..299) {
                     BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
                 } else {
                     val stream = conn.errorStream
-                    if (stream != null) {
-                        BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() }
-                    } else ""
+                    if (stream != null) BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() } else ""
                 }
             } catch (_: Throwable) {
                 ""
@@ -112,31 +268,42 @@ object FirestoreSyncService {
             conn.disconnect()
 
             when (code) {
-                in 200..299 -> FirebaseVerificationReport(
-                    isConnected = true,
-                    state = FirebaseConnectionState.CONNECTED,
-                    projectId = projectId,
-                    httpStatusCode = code,
-                    statusMessage = "Connected: Real Google Cloud Firestore project '$projectId' active with live read/write access.",
-                    firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
-                    hasGoogleServicesJson = true,
-                    isRealGoogleCloudProject = true
-                )
-                403 -> {
-                    val message = if (responseBody.contains("SERVICE_DISABLED")) {
-                        "Real Google Cloud project '$projectId' verified with google-services.json. Cloud Firestore endpoint contacted at firestore.googleapis.com (API activation required in Google Cloud Console for unrestricted access)."
+                in 200..299 -> {
+                    val authDetail = if (authUser != null) {
+                        "Authenticated UID (${authUser.uid.take(8)}…) • Read/Write enabled."
                     } else {
-                        "Real Google Cloud project '$projectId' verified with google-services.json. Firestore endpoint reached (HTTP 403: Security rules require authentication)."
+                        "Public storefront read active • Log in with Mobile OTP for owner/order writes."
                     }
                     FirebaseVerificationReport(
                         isConnected = true,
-                        state = FirebaseConnectionState.VERIFIED_AUTH_REQUIRED,
+                        state = FirebaseConnectionState.CONNECTED,
+                        projectId = projectId,
+                        httpStatusCode = code,
+                        statusMessage = "Connected to Firestore '$projectId'. $authDetail",
+                        firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
+                        hasGoogleServicesJson = true,
+                        isRealGoogleCloudProject = true,
+                        isUserAuthenticated = authUser != null,
+                        authenticatedUid = authUser?.uid
+                    )
+                }
+                401, 403 -> {
+                    val message = if (responseBody.contains("SERVICE_DISABLED")) {
+                        "HTTP $code: Cloud Firestore API is disabled on project '$projectId'."
+                    } else {
+                        "HTTP $code Permission Denied: Firestore security rules or authentication rejected access."
+                    }
+                    FirebaseVerificationReport(
+                        isConnected = false,
+                        state = FirebaseConnectionState.PERMISSION_DENIED,
                         projectId = projectId,
                         httpStatusCode = code,
                         statusMessage = message,
-                        firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
+                        firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
                         hasGoogleServicesJson = true,
-                        isRealGoogleCloudProject = true
+                        isRealGoogleCloudProject = true,
+                        isUserAuthenticated = authUser != null,
+                        authenticatedUid = authUser?.uid
                     )
                 }
                 404 -> {
@@ -151,9 +318,11 @@ object FirestoreSyncService {
                         projectId = projectId,
                         httpStatusCode = code,
                         statusMessage = notFoundMessage,
-                        firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
+                        firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
                         hasGoogleServicesJson = true,
-                        isRealGoogleCloudProject = false
+                        isRealGoogleCloudProject = false,
+                        isUserAuthenticated = authUser != null,
+                        authenticatedUid = authUser?.uid
                     )
                 }
                 else -> FirebaseVerificationReport(
@@ -162,9 +331,11 @@ object FirestoreSyncService {
                     projectId = projectId,
                     httpStatusCode = code,
                     statusMessage = "Firestore endpoint returned HTTP code $code.",
-                    firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
+                    firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
                     hasGoogleServicesJson = true,
-                    isRealGoogleCloudProject = false
+                    isRealGoogleCloudProject = false,
+                    isUserAuthenticated = authUser != null,
+                    authenticatedUid = authUser?.uid
                 )
             }
         } catch (e: Throwable) {
@@ -174,9 +345,11 @@ object FirestoreSyncService {
                 projectId = projectId,
                 httpStatusCode = -1,
                 statusMessage = "Network error connecting to Firestore: ${e.message}",
-                firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_ORDERS_URL,
+                firestoreEndpoint = FirebaseSyncConfig.FIRESTORE_BASE_URL,
                 hasGoogleServicesJson = true,
-                isRealGoogleCloudProject = false
+                isRealGoogleCloudProject = false,
+                isUserAuthenticated = authUser != null,
+                authenticatedUid = authUser?.uid
             )
         }
     }
@@ -194,6 +367,9 @@ object FirestoreSyncService {
         fields.put("orderNumber", JSONObject().put("stringValue", order.orderNumber))
         fields.put("userId", JSONObject().put("integerValue", order.userId.toString()))
         fields.put("shopId", JSONObject().put("integerValue", order.shopId.toString()))
+        fields.put("shopDocId", JSONObject().put("stringValue", "shop_${order.shopId}"))
+        fields.put("customerUid", JSONObject().put("stringValue", order.customerUid))
+        fields.put("shopOwnerUid", JSONObject().put("stringValue", order.shopOwnerUid))
 
         // Explicit customer fields
         fields.put("customer", JSONObject().put("stringValue", order.customerName))
@@ -379,6 +555,8 @@ object FirestoreSyncService {
             }
             val deliveryAgent = getFieldString(fields, "deliveryAgentAssigned").ifBlank { null }
             val estimatedDeliveryTime = getFieldLong(fields, "estimatedDeliveryTime", 0L)
+            val customerUid = getFieldString(fields, "customerUid")
+            val shopOwnerUid = getFieldString(fields, "shopOwnerUid")
 
             val parsedStatus = try { OrderStatus.valueOf(statusStr) } catch (_: Throwable) { OrderStatus.PLACED }
             val parsedDeliveryType = try { DeliveryType.valueOf(deliveryTypeStr) } catch (_: Throwable) { DeliveryType.HOME_DELIVERY }
@@ -404,7 +582,9 @@ object FirestoreSyncService {
                 orderNotes = orderNotes,
                 placedAt = placedAt,
                 deliveryAgentAssigned = deliveryAgent,
-                estimatedDeliveryTime = estimatedDeliveryTime
+                estimatedDeliveryTime = estimatedDeliveryTime,
+                customerUid = customerUid,
+                shopOwnerUid = shopOwnerUid
             )
 
             val itemsList = mutableListOf<OrderItemEntity>()
@@ -471,6 +651,9 @@ object FirestoreSyncService {
         map["orderNumber"] = order.orderNumber
         map["userId"] = order.userId
         map["shopId"] = order.shopId
+        map["shopDocId"] = "shop_${order.shopId}"
+        map["customerUid"] = order.customerUid.ifBlank { currentUidOrNull() ?: "" }
+        map["shopOwnerUid"] = order.shopOwnerUid
 
         // Explicit customer fields
         map["customer"] = order.customerName
@@ -578,6 +761,8 @@ object FirestoreSyncService {
             }
             val deliveryAgent = getAnyString(doc, "deliveryAgentAssigned").ifBlank { null }
             val estimatedDeliveryTime = getAnyLong(doc, "estimatedDeliveryTime", 0L)
+            val customerUid = getAnyString(doc, "customerUid")
+            val shopOwnerUid = getAnyString(doc, "shopOwnerUid")
 
             val parsedStatus = try { OrderStatus.valueOf(statusStr) } catch (_: Throwable) { OrderStatus.PLACED }
             val parsedDeliveryType = try { DeliveryType.valueOf(deliveryTypeStr) } catch (_: Throwable) { DeliveryType.HOME_DELIVERY }
@@ -603,7 +788,9 @@ object FirestoreSyncService {
                 orderNotes = orderNotes,
                 placedAt = placedAt,
                 deliveryAgentAssigned = deliveryAgent,
-                estimatedDeliveryTime = estimatedDeliveryTime
+                estimatedDeliveryTime = estimatedDeliveryTime,
+                customerUid = customerUid,
+                shopOwnerUid = shopOwnerUid
             )
 
             val itemsList = mutableListOf<OrderItemEntity>()
@@ -690,71 +877,49 @@ object FirestoreSyncService {
     }
 
     /**
-     * Pushes a newly placed order to Firebase Firestore using Firebase SDK and REST API.
+     * Pushes a newly placed order to Firebase Firestore using authenticated Firebase SDK.
      */
-    suspend fun pushOrderToFirestore(order: OrderEntity, items: List<OrderItemEntity>, shopName: String? = null): Boolean = withContext(Dispatchers.IO) {
-        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+    suspend fun pushOrderToFirestore(order: OrderEntity, items: List<OrderItemEntity>, shopName: String? = null): Boolean {
+        return pushOrderToFirestoreWithResult(order, items, shopName) is CloudSyncResult.Success
+    }
 
-        var sdkSaved = false
-        val map = orderToMap(order, items, shopName)
-        val docId = order.orderNumber
-
-        // Tier 1: Save directly to Firebase Firestore SDK (persists to cache and queues upload)
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val docRef = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
-                .document(docId)
-            val setTask = docRef.set(map)
-            try {
-                Tasks.await(setTask, 4, TimeUnit.SECONDS)
-                sdkSaved = true
-            } catch (te: Exception) {
-                // In Firestore SDK, docRef.set() is immediately committed to local offline cache
-                // and queued for cloud synchronization
-                sdkSaved = true
-            }
-            Log.i(TAG, "Order #${order.orderNumber} successfully pushed via Firebase SDK")
-        } catch (e: Throwable) {
-            Log.w(TAG, "Firebase SDK direct push notice: ${e.message}")
-            try {
-                FirebaseFirestore.getInstance()
-                    .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
-                    .document(docId)
-                    .set(map)
-                sdkSaved = true
-            } catch (_: Throwable) { }
+    suspend fun pushOrderToFirestoreWithResult(
+        order: OrderEntity,
+        items: List<OrderItemEntity>,
+        shopName: String? = null
+    ): CloudSyncResult<Unit> = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) {
+            return@withContext CloudSyncResult.Failure("SYNC_DISABLED", "Cloud sync is disabled.")
         }
+        val uid = currentUidOrNull()
+            ?: return@withContext CloudSyncResult.Failure(
+                "UNAUTHENTICATED",
+                "Please sign in with Mobile OTP to submit your order to the cloud.",
+                isAuthOrPermissionError = true
+            )
 
-        // Tier 2: Direct REST PATCH for cloud endpoint verification
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}/$docId$keyParam"
-            val payload = orderToFirestorePayload(order, items, shopName)
+        val effectiveOrder = order.copy(customerUid = order.customerUid.ifBlank { uid })
+        val map = orderToMap(effectiveOrder, items, shopName)
+        val docId = effectiveOrder.orderNumber
 
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "PATCH"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
-            }
-
-            val code = conn.responseCode
-            conn.disconnect()
-            Log.d(TAG, "Firestore REST push response: $code for ${order.orderNumber}")
-            if (code in 200..299) return@withContext true
+        return@withContext try {
+            val firestore = firestoreOrNull()
+                ?: return@withContext CloudSyncResult.Failure("NOT_INITIALIZED", "Firebase Firestore is not initialized on this device.")
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS).document(docId).set(map),
+                10,
+                TimeUnit.SECONDS
+            )
+            Log.i(TAG, "Order #${effectiveOrder.orderNumber} pushed via Firebase SDK")
+            CloudSyncResult.Success(Unit)
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST push: ${e.message}")
+            val msg = handleFirestoreError(e, OperationType.WRITE, "${FirebaseSyncConfig.COLLECTION_ORDERS}/$docId")
+            CloudSyncResult.Failure(
+                errorCode = if (isAuthOrPermException(e)) "PERMISSION_DENIED" else "WRITE_FAILED",
+                userMessage = msg,
+                isAuthOrPermissionError = isAuthOrPermException(e)
+            )
         }
-
-        sdkSaved
     }
 
     /**
@@ -762,81 +927,109 @@ object FirestoreSyncService {
      */
     suspend fun updateOrderStatusInFirestore(orderNumber: String, status: OrderStatus): Boolean = withContext(Dispatchers.IO) {
         if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+        if (currentUidOrNull() == null) return@withContext false
 
-        var sdkUpdated = false
-        try {
-            val firestore = FirebaseFirestore.getInstance()
+        return@withContext try {
+            val firestore = firestoreOrNull() ?: return@withContext false
             Tasks.await(
                 firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
                     .document(orderNumber)
                     .update(mapOf("status" to status.name, "syncedAt" to System.currentTimeMillis())),
-                4,
+                8,
                 TimeUnit.SECONDS
             )
-            sdkUpdated = true
+            true
         } catch (e: Throwable) {
-            try {
-                FirebaseFirestore.getInstance()
-                    .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
-                    .document(orderNumber)
-                    .update(mapOf("status" to status.name, "syncedAt" to System.currentTimeMillis()))
-                sdkUpdated = true
-            } catch (_: Throwable) { }
+            handleFirestoreError(e, OperationType.UPDATE, "${FirebaseSyncConfig.COLLECTION_ORDERS}/$orderNumber")
+            false
         }
-
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}/$orderNumber?updateMask.fieldPaths=status&updateMask.fieldPaths=syncedAt$keyParam"
-            val fields = JSONObject()
-            fields.put("status", JSONObject().put("stringValue", status.name))
-            fields.put("syncedAt", JSONObject().put("integerValue", System.currentTimeMillis().toString()))
-            val payload = JSONObject().put("fields", fields)
-
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "PATCH"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
-            }
-
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST status update: ${e.message}")
-        }
-
-        sdkUpdated
     }
 
+    private fun safeRuleImageUrl(raw: String): String {
+        val trimmed = raw.trim().ifBlank { "hero_local_mart" }
+        return if (trimmed.length <= 400_000) trimmed else "hero_local_mart"
+    }
+
+    private fun safeRuleShopName(name: String): String =
+        name.trim().ifBlank { "Sinapali Shop" }.let { if (it.length < 2) "$it Shop" else it }.take(120)
+
+    private fun safeRuleShopCategory(category: String): String =
+        category.trim().ifBlank { "Daily Essentials" }.take(100)
+
+    private fun safeRuleShopAddress(address: String): String =
+        address.trim().ifBlank { "Sinapali Main Market" }.let { if (it.length < 2) "Sinapali, $it" else it }.take(300)
+
+    private fun safeRuleShopPhone(phone: String): String {
+        val cleaned = phone.trim().filter { it.isDigit() || it == '+' }
+        return when {
+            cleaned.length in 7..20 -> cleaned
+            cleaned.length > 20 -> cleaned.take(20)
+            cleaned.isBlank() -> "9999999999"
+            else -> cleaned.padEnd(10, '0')
+        }
+    }
+
+    private fun safeRuleProductName(name: String): String =
+        name.trim().ifBlank { "Local Product" }.take(200)
+
+    private fun safeRuleProductCategory(category: String): String =
+        category.trim().ifBlank { "Daily Essentials" }.take(100)
+
+    private fun safeRuleProductDescription(description: String): String =
+        description.trim().take(4000)
+
+    private fun safeRuleProductPrice(price: Double): Double =
+        if (price.isFinite() && price > 0.0) price else 1.0
+
+    private fun safeRuleProductUnit(unit: String): String =
+        unit.trim().ifBlank { "1 unit" }.take(50)
+
     /**
-     * Converts a ShopEntity to Map suitable for Firebase Firestore SDK.
+     * Converts a ShopEntity to Map suitable for Firebase Firestore SDK create/full write.
      */
     fun shopToMap(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): Map<String, Any> {
+        val resolvedUid = shop.ownerUid.ifBlank { owner?.firebaseUid ?: currentUidOrNull() ?: "" }.take(128)
+        val safeRating = if (shop.rating.isFinite()) shop.rating.coerceIn(0.0, 5.0) else 4.8
+        val safeMinOrder = if (shop.minOrderAmount.isFinite() && shop.minOrderAmount >= 0.0) shop.minOrderAmount else 0.0
         return mutableMapOf(
             "id" to shop.id,
             "ownerId" to shop.ownerId,
-            "name" to shop.name,
-            "category" to shop.category,
-            "address" to shop.address,
-            "phone" to shop.phone,
-            "upiId" to shop.upiId,
-            "rating" to shop.rating,
-            "reviewCount" to shop.reviewCount,
+            "ownerUid" to resolvedUid,
+            "name" to safeRuleShopName(shop.name),
+            "category" to safeRuleShopCategory(shop.category),
+            "address" to safeRuleShopAddress(shop.address),
+            "phone" to safeRuleShopPhone(shop.phone),
+            "upiId" to shop.upiId.trim().take(100),
+            "rating" to safeRating,
+            "reviewCount" to shop.reviewCount.coerceAtLeast(0),
             "isOpen" to shop.isOpen,
             "deliveryAvailable" to shop.deliveryAvailable,
-            "minOrderAmount" to shop.minOrderAmount,
-            "estimatedDeliveryMins" to shop.estimatedDeliveryMins,
+            "minOrderAmount" to safeMinOrder,
+            "estimatedDeliveryMins" to shop.estimatedDeliveryMins.coerceIn(0, 1440),
             "isApproved" to shop.isApproved,
-            "imageUrl" to shop.imageUrl,
-            "ownerName" to (owner?.name ?: ""),
+            "imageUrl" to safeRuleImageUrl(shop.imageUrl),
+            "ownerName" to (owner?.name ?: "").trim().take(120),
+            "updatedAt" to System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Returns only the Shop fields mutable by non-admin owners under firestore.rules allow update.
+     */
+    fun shopToEditableMap(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): Map<String, Any> {
+        val safeMinOrder = if (shop.minOrderAmount.isFinite() && shop.minOrderAmount >= 0.0) shop.minOrderAmount else 0.0
+        return mutableMapOf(
+            "name" to safeRuleShopName(shop.name),
+            "category" to safeRuleShopCategory(shop.category),
+            "address" to safeRuleShopAddress(shop.address),
+            "phone" to safeRuleShopPhone(shop.phone),
+            "upiId" to shop.upiId.trim().take(100),
+            "isOpen" to shop.isOpen,
+            "deliveryAvailable" to shop.deliveryAvailable,
+            "minOrderAmount" to safeMinOrder,
+            "estimatedDeliveryMins" to shop.estimatedDeliveryMins.coerceIn(0, 1440),
+            "imageUrl" to safeRuleImageUrl(shop.imageUrl),
+            "ownerName" to (owner?.name ?: "").trim().take(120),
             "updatedAt" to System.currentTimeMillis()
         )
     }
@@ -847,88 +1040,115 @@ object FirestoreSyncService {
     fun shopToFirestorePayload(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): JSONObject {
         val root = JSONObject()
         val fields = JSONObject()
+        val resolvedUid = shop.ownerUid.ifBlank { owner?.firebaseUid ?: currentUidOrNull() ?: "" }.take(128)
+        val safeRating = if (shop.rating.isFinite()) shop.rating.coerceIn(0.0, 5.0) else 4.8
+        val safeMinOrder = if (shop.minOrderAmount.isFinite() && shop.minOrderAmount >= 0.0) shop.minOrderAmount else 0.0
         fields.put("id", JSONObject().put("integerValue", shop.id.toString()))
         fields.put("ownerId", JSONObject().put("integerValue", shop.ownerId.toString()))
-        fields.put("name", JSONObject().put("stringValue", shop.name))
-        fields.put("category", JSONObject().put("stringValue", shop.category))
-        fields.put("address", JSONObject().put("stringValue", shop.address))
-        fields.put("phone", JSONObject().put("stringValue", shop.phone))
-        fields.put("upiId", JSONObject().put("stringValue", shop.upiId))
-        fields.put("rating", JSONObject().put("doubleValue", shop.rating))
-        fields.put("reviewCount", JSONObject().put("integerValue", shop.reviewCount.toString()))
+        fields.put("ownerUid", JSONObject().put("stringValue", resolvedUid))
+        fields.put("name", JSONObject().put("stringValue", safeRuleShopName(shop.name)))
+        fields.put("category", JSONObject().put("stringValue", safeRuleShopCategory(shop.category)))
+        fields.put("address", JSONObject().put("stringValue", safeRuleShopAddress(shop.address)))
+        fields.put("phone", JSONObject().put("stringValue", safeRuleShopPhone(shop.phone)))
+        fields.put("upiId", JSONObject().put("stringValue", shop.upiId.trim().take(100)))
+        fields.put("rating", JSONObject().put("doubleValue", safeRating))
+        fields.put("reviewCount", JSONObject().put("integerValue", shop.reviewCount.coerceAtLeast(0).toString()))
         fields.put("isOpen", JSONObject().put("booleanValue", shop.isOpen))
         fields.put("deliveryAvailable", JSONObject().put("booleanValue", shop.deliveryAvailable))
-        fields.put("minOrderAmount", JSONObject().put("doubleValue", shop.minOrderAmount))
-        fields.put("estimatedDeliveryMins", JSONObject().put("integerValue", shop.estimatedDeliveryMins.toString()))
+        fields.put("minOrderAmount", JSONObject().put("doubleValue", safeMinOrder))
+        fields.put("estimatedDeliveryMins", JSONObject().put("integerValue", shop.estimatedDeliveryMins.coerceIn(0, 1440).toString()))
         fields.put("isApproved", JSONObject().put("booleanValue", shop.isApproved))
-        fields.put("imageUrl", JSONObject().put("stringValue", shop.imageUrl))
-        fields.put("ownerName", JSONObject().put("stringValue", owner?.name ?: ""))
+        fields.put("imageUrl", JSONObject().put("stringValue", safeRuleImageUrl(shop.imageUrl)))
+        fields.put("ownerName", JSONObject().put("stringValue", (owner?.name ?: "").trim().take(120)))
         fields.put("updatedAt", JSONObject().put("integerValue", System.currentTimeMillis().toString()))
         root.put("fields", fields)
         return root
     }
 
     /**
-     * Saves a newly registered or updated shop to Firebase Firestore.
+     * Saves a newly registered or updated shop to Firebase Firestore with honest status propagation.
      */
-    suspend fun pushShopToFirestore(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): Boolean = withContext(Dispatchers.IO) {
-        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+    suspend fun pushShopToFirestore(shop: com.example.data.local.entities.ShopEntity, owner: com.example.data.local.entities.UserEntity? = null): Boolean {
+        return pushShopToFirestoreWithResult(shop, owner, isNew = shop.id <= 0L) is CloudSyncResult.Success
+    }
 
-        var sdkSaved = false
-        val effectiveId = if (shop.id > 0L) shop.id else (System.currentTimeMillis() % 100000000L + 1000L)
-        val effectiveShop = if (shop.id > 0L) shop else shop.copy(id = effectiveId)
+    suspend fun pushShopToFirestoreWithResult(
+        shop: com.example.data.local.entities.ShopEntity,
+        owner: com.example.data.local.entities.UserEntity? = null,
+        isNew: Boolean = false
+    ): CloudSyncResult<com.example.data.local.entities.ShopEntity> = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) {
+            Log.e(TAG, "Firestore shop write aborted: IS_LIVE_CLOUD_SYNC_ACTIVE is false (shopId=${shop.id})")
+            return@withContext CloudSyncResult.Failure("SYNC_DISABLED", "Cloud sync is disabled.")
+        }
+
+        val uid = currentUidOrNull()
+        if (uid == null) {
+            Log.e(
+                TAG,
+                "Firestore shop write aborted: FirebaseAuth currentUser is null (project=${FirebaseSyncConfig.FIREBASE_PROJECT_ID}, shopId=${shop.id}, shopOwnerUid=${shop.ownerUid})"
+            )
+            return@withContext CloudSyncResult.Failure(
+                "UNAUTHENTICATED",
+                "Shop owner OTP sign-in is required before syncing your shop to Cloud Firestore.",
+                isAuthOrPermissionError = true
+            )
+        }
+
+        val creatingNew = isNew || shop.id <= 0L
+        val effectiveId = if (shop.id > 0L) shop.id else System.currentTimeMillis()
+        val effectiveShop = shop.copy(
+            id = effectiveId,
+            ownerUid = shop.ownerUid.ifBlank { uid }
+        )
         val docId = "shop_$effectiveId"
-        val map = shopToMap(effectiveShop, owner)
+        val fullMap = shopToMap(effectiveShop, owner)
+        val editableMap = shopToEditableMap(effectiveShop, owner)
 
-        // Tier 1: Firebase SDK
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).document(docId).set(map)
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkSaved = true
-            } catch (_: Exception) {
-                sdkSaved = true
+        return@withContext try {
+            val firestore = firestoreOrNull()
+            if (firestore == null) {
+                Log.e(TAG, "Firestore shop write aborted: FirebaseFirestore instance is null (path=${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId)")
+                return@withContext CloudSyncResult.Failure("NOT_INITIALIZED", "Firebase Firestore is not initialized on this device.")
             }
-            Log.i(TAG, "Shop '${effectiveShop.name}' (#${effectiveShop.id}) pushed via Firebase SDK")
-        } catch (e: Throwable) {
-            Log.w(TAG, "Firebase SDK shop push notice: ${e.message}")
-            try {
-                FirebaseFirestore.getInstance().collection(FirebaseSyncConfig.COLLECTION_SHOPS)
-                    .document(docId).set(map)
-                sdkSaved = true
-            } catch (_: Throwable) { }
-        }
-
-        // Tier 2: REST PATCH
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId$keyParam"
-            val payload = shopToFirestorePayload(effectiveShop, owner)
-
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "PATCH"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
+            val docRef = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).document(docId)
+            if (creatingNew) {
+                Tasks.await(docRef.set(fullMap), 10, TimeUnit.SECONDS)
+            } else {
+                try {
+                    Tasks.await(docRef.update(editableMap), 10, TimeUnit.SECONDS)
+                } catch (updateErr: Throwable) {
+                    val rootFs = generateSequence(updateErr) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (rootFs?.code == FirebaseFirestoreException.Code.NOT_FOUND ||
+                        rootFs?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+                    ) {
+                        Log.w(
+                            TAG,
+                            "Shop update on ${docRef.path} returned ${rootFs.code}; attempting set(fullMap) in case document does not exist yet (uid=$uid)"
+                        )
+                        Tasks.await(docRef.set(fullMap), 10, TimeUnit.SECONDS)
+                    } else {
+                        throw updateErr
+                    }
+                }
             }
-
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
+            Log.i(TAG, "Shop '${effectiveShop.name}' (#${effectiveShop.id}) confirmed in Firestore at ${docRef.path} (uid=$uid)")
+            CloudSyncResult.Success(effectiveShop)
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST shop push: ${e.message}")
+            val msg = handleFirestoreError(e, OperationType.WRITE, "${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId")
+            Log.e(
+                TAG,
+                "Firestore shop write FAILED: project=${FirebaseSyncConfig.FIREBASE_PROJECT_ID}, path=${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId, uid=$uid, shopOwnerUid=${effectiveShop.ownerUid}, error=${e.message}",
+                e
+            )
+            CloudSyncResult.Failure(
+                errorCode = if (isAuthOrPermException(e)) "PERMISSION_DENIED" else "WRITE_FAILED",
+                userMessage = msg,
+                isAuthOrPermissionError = isAuthOrPermException(e)
+            )
         }
-
-        sdkSaved
     }
 
     /**
@@ -941,6 +1161,7 @@ object FirestoreSyncService {
             val name = getAnyString(doc, "name")
             if (name.isBlank()) return null
             val ownerId = getAnyLong(doc, "ownerId", 0L)
+            val ownerUid = getAnyString(doc, "ownerUid")
             val category = getAnyString(doc, "category", "Daily Groceries & Essentials")
             val address = getAnyString(doc, "address", "Sinapali Main Market")
             val phone = getAnyString(doc, "phone")
@@ -969,7 +1190,8 @@ object FirestoreSyncService {
                 minOrderAmount = minOrderAmount,
                 estimatedDeliveryMins = estimatedDeliveryMins,
                 isApproved = isApproved,
-                imageUrl = imageUrl
+                imageUrl = imageUrl,
+                ownerUid = ownerUid
             )
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to parse Firestore shop doc: ${e.message}")
@@ -989,6 +1211,7 @@ object FirestoreSyncService {
             val name = getFieldString(fields, "name")
             if (name.isBlank()) return null
             val ownerId = getFieldLong(fields, "ownerId", 0L)
+            val ownerUid = getFieldString(fields, "ownerUid")
             val category = getFieldString(fields, "category", "Daily Groceries & Essentials")
             val address = getFieldString(fields, "address", "Sinapali Main Market")
             val phone = getFieldString(fields, "phone")
@@ -1017,7 +1240,8 @@ object FirestoreSyncService {
                 minOrderAmount = minOrderAmount,
                 estimatedDeliveryMins = estimatedDeliveryMins,
                 isApproved = isApproved,
-                imageUrl = imageUrl
+                imageUrl = imageUrl,
+                ownerUid = ownerUid
             )
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to parse Firestore shop JSON: ${e.message}")
@@ -1025,25 +1249,53 @@ object FirestoreSyncService {
         }
     }
 
+    private fun safeRuleDiscountPrice(price: Double, discountPrice: Double?): Double {
+        val candidate = discountPrice ?: 0.0
+        return if (candidate in 0.0..price) candidate else 0.0
+    }
+
     /**
-     * Converts a ProductEntity to Map suitable for Firebase Firestore SDK.
+     * Converts a ProductEntity to Map suitable for Firebase Firestore SDK create/full write.
      */
     fun productToMap(product: com.example.data.local.entities.ProductEntity): Map<String, Any> {
+        val resolvedUid = product.ownerUid.ifBlank { currentUidOrNull() ?: "" }.take(128)
+        val safePrice = safeRuleProductPrice(product.price)
         val map = mutableMapOf<String, Any>()
         map["id"] = product.id
         map["shopId"] = product.shopId
-        map["name"] = product.name
-        map["category"] = product.category
-        map["description"] = product.description
-        map["price"] = product.price
-        map["discountPrice"] = product.discountPrice ?: 0.0
-        map["unit"] = product.unit
-        map["stock"] = product.stock
+        map["shopDocId"] = "shop_${product.shopId}"
+        map["ownerUid"] = resolvedUid
+        map["name"] = safeRuleProductName(product.name)
+        map["category"] = safeRuleProductCategory(product.category)
+        map["description"] = safeRuleProductDescription(product.description)
+        map["price"] = safePrice
+        map["discountPrice"] = safeRuleDiscountPrice(safePrice, product.discountPrice)
+        map["unit"] = safeRuleProductUnit(product.unit)
+        map["stock"] = product.stock.coerceAtLeast(0)
         map["isAvailable"] = product.isAvailable
-        map["imageUrl"] = product.imageUrl
+        map["imageUrl"] = safeRuleImageUrl(product.imageUrl)
         map["isApproved"] = product.isApproved
         map["updatedAt"] = System.currentTimeMillis()
         return map
+    }
+
+    /**
+     * Returns only the Product fields mutable by non-admin owners under firestore.rules allow update.
+     */
+    fun productToEditableMap(product: com.example.data.local.entities.ProductEntity): Map<String, Any> {
+        val safePrice = safeRuleProductPrice(product.price)
+        return mutableMapOf(
+            "name" to safeRuleProductName(product.name),
+            "category" to safeRuleProductCategory(product.category),
+            "description" to safeRuleProductDescription(product.description),
+            "price" to safePrice,
+            "discountPrice" to safeRuleDiscountPrice(safePrice, product.discountPrice),
+            "unit" to safeRuleProductUnit(product.unit),
+            "stock" to product.stock.coerceAtLeast(0),
+            "isAvailable" to product.isAvailable,
+            "imageUrl" to safeRuleImageUrl(product.imageUrl),
+            "updatedAt" to System.currentTimeMillis()
+        )
     }
 
     /**
@@ -1052,17 +1304,21 @@ object FirestoreSyncService {
     fun productToFirestorePayload(product: com.example.data.local.entities.ProductEntity): JSONObject {
         val root = JSONObject()
         val fields = JSONObject()
+        val resolvedUid = product.ownerUid.ifBlank { currentUidOrNull() ?: "" }.take(128)
+        val safePrice = safeRuleProductPrice(product.price)
         fields.put("id", JSONObject().put("integerValue", product.id.toString()))
         fields.put("shopId", JSONObject().put("integerValue", product.shopId.toString()))
-        fields.put("name", JSONObject().put("stringValue", product.name))
-        fields.put("category", JSONObject().put("stringValue", product.category))
-        fields.put("description", JSONObject().put("stringValue", product.description))
-        fields.put("price", JSONObject().put("doubleValue", product.price))
-        fields.put("discountPrice", JSONObject().put("doubleValue", product.discountPrice ?: 0.0))
-        fields.put("unit", JSONObject().put("stringValue", product.unit))
-        fields.put("stock", JSONObject().put("integerValue", product.stock.toString()))
+        fields.put("shopDocId", JSONObject().put("stringValue", "shop_${product.shopId}"))
+        fields.put("ownerUid", JSONObject().put("stringValue", resolvedUid))
+        fields.put("name", JSONObject().put("stringValue", safeRuleProductName(product.name)))
+        fields.put("category", JSONObject().put("stringValue", safeRuleProductCategory(product.category)))
+        fields.put("description", JSONObject().put("stringValue", safeRuleProductDescription(product.description)))
+        fields.put("price", JSONObject().put("doubleValue", safePrice))
+        fields.put("discountPrice", JSONObject().put("doubleValue", safeRuleDiscountPrice(safePrice, product.discountPrice)))
+        fields.put("unit", JSONObject().put("stringValue", safeRuleProductUnit(product.unit)))
+        fields.put("stock", JSONObject().put("integerValue", product.stock.coerceAtLeast(0).toString()))
         fields.put("isAvailable", JSONObject().put("booleanValue", product.isAvailable))
-        fields.put("imageUrl", JSONObject().put("stringValue", product.imageUrl))
+        fields.put("imageUrl", JSONObject().put("stringValue", safeRuleImageUrl(product.imageUrl)))
         fields.put("isApproved", JSONObject().put("booleanValue", product.isApproved))
         fields.put("updatedAt", JSONObject().put("integerValue", System.currentTimeMillis().toString()))
         root.put("fields", fields)
@@ -1070,105 +1326,132 @@ object FirestoreSyncService {
     }
 
     /**
-     * Pushes a new or updated product to Firebase Firestore.
+     * Pushes a new or updated product to Firebase Firestore with honest status propagation.
      */
-    suspend fun pushProductToFirestore(product: com.example.data.local.entities.ProductEntity): Boolean = withContext(Dispatchers.IO) {
-        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+    suspend fun pushProductToFirestore(product: com.example.data.local.entities.ProductEntity): Boolean {
+        return pushProductToFirestoreWithResult(product, isNew = product.id <= 0L) is CloudSyncResult.Success
+    }
 
-        var sdkSaved = false
-        val effectiveId = if (product.id > 0L) product.id else (System.currentTimeMillis() % 100000000L + 10000L)
-        val effectiveProduct = if (product.id > 0L) product else product.copy(id = effectiveId)
+    suspend fun pushProductToFirestoreWithResult(
+        product: com.example.data.local.entities.ProductEntity,
+        isNew: Boolean = false
+    ): CloudSyncResult<com.example.data.local.entities.ProductEntity> = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) {
+            Log.e(TAG, "Firestore product write aborted: IS_LIVE_CLOUD_SYNC_ACTIVE is false (productId=${product.id}, shopId=${product.shopId})")
+            return@withContext CloudSyncResult.Failure("SYNC_DISABLED", "Cloud sync is disabled.")
+        }
+
+        val uid = currentUidOrNull()
+        if (uid == null) {
+            Log.e(
+                TAG,
+                "Firestore product write aborted: FirebaseAuth currentUser is null (project=${FirebaseSyncConfig.FIREBASE_PROJECT_ID}, productId=${product.id}, shopId=${product.shopId})"
+            )
+            return@withContext CloudSyncResult.Failure(
+                "UNAUTHENTICATED",
+                "Please sign in with Mobile OTP to save products to Cloud Firestore.",
+                isAuthOrPermissionError = true
+            )
+        }
+
+        val creatingNew = isNew || product.id <= 0L
+        val effectiveId = if (product.id > 0L) product.id else System.currentTimeMillis()
+        val effectiveProduct = product.copy(
+            id = effectiveId,
+            ownerUid = product.ownerUid.ifBlank { uid }
+        )
         val docId = "prod_$effectiveId"
-        val map = productToMap(effectiveProduct)
+        val fullMap = productToMap(effectiveProduct)
+        val editableMap = productToEditableMap(effectiveProduct)
 
-        // Tier 1: Firebase SDK
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS).document(docId).set(map)
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkSaved = true
-            } catch (_: Exception) {
-                sdkSaved = true
+        return@withContext try {
+            val firestore = firestoreOrNull()
+            if (firestore == null) {
+                Log.e(TAG, "Firestore product write aborted: FirebaseFirestore instance is null (path=${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId)")
+                return@withContext CloudSyncResult.Failure("NOT_INITIALIZED", "Firebase Firestore is not initialized on this device.")
             }
-            Log.i(TAG, "Product '${effectiveProduct.name}' (#${effectiveProduct.id}, shopId=${effectiveProduct.shopId}) pushed via Firebase SDK")
-        } catch (e: Throwable) {
-            Log.w(TAG, "Firebase SDK product push notice: ${e.message}")
-            try {
-                FirebaseFirestore.getInstance().collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
-                    .document(docId).set(map)
-                sdkSaved = true
-            } catch (_: Throwable) { }
-        }
-
-        // Tier 2: REST PATCH
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId$keyParam"
-            val payload = productToFirestorePayload(effectiveProduct)
-
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "PATCH"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
+            val docRef = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS).document(docId)
+            if (creatingNew) {
+                Tasks.await(docRef.set(fullMap), 10, TimeUnit.SECONDS)
+            } else {
+                try {
+                    Tasks.await(docRef.update(editableMap), 10, TimeUnit.SECONDS)
+                } catch (updateErr: Throwable) {
+                    val rootFs = generateSequence(updateErr) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (rootFs?.code == FirebaseFirestoreException.Code.NOT_FOUND ||
+                        rootFs?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+                    ) {
+                        Log.w(
+                            TAG,
+                            "Product update on ${docRef.path} returned ${rootFs.code}; attempting set(fullMap) in case document does not exist yet (uid=$uid, shopDocId=shop_${effectiveProduct.shopId})"
+                        )
+                        Tasks.await(docRef.set(fullMap), 10, TimeUnit.SECONDS)
+                    } else {
+                        throw updateErr
+                    }
+                }
             }
-
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
+            Log.i(
+                TAG,
+                "Product '${effectiveProduct.name}' confirmed in Firestore at ${docRef.path} (shopId=${effectiveProduct.shopId}, uid=$uid)"
+            )
+            CloudSyncResult.Success(effectiveProduct)
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST product push: ${e.message}")
+            val msg = handleFirestoreError(e, OperationType.WRITE, "${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId")
+            Log.e(
+                TAG,
+                "Firestore product write FAILED: project=${FirebaseSyncConfig.FIREBASE_PROJECT_ID}, path=${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId, shopDocId=shop_${effectiveProduct.shopId}, uid=$uid, ownerUid=${effectiveProduct.ownerUid}, isNew=$creatingNew, error=${e.message}",
+                e
+            )
+            CloudSyncResult.Failure(
+                errorCode = if (isAuthOrPermException(e)) "PERMISSION_DENIED" else "WRITE_FAILED",
+                userMessage = msg,
+                isAuthOrPermissionError = isAuthOrPermException(e)
+            )
         }
-
-        sdkSaved
     }
 
     /**
      * Deletes a product from Firebase Firestore across all devices.
      */
-    suspend fun deleteProductFromFirestore(product: com.example.data.local.entities.ProductEntity): Boolean = withContext(Dispatchers.IO) {
-        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+    suspend fun deleteProductFromFirestore(product: com.example.data.local.entities.ProductEntity): Boolean {
+        return deleteProductFromFirestoreWithResult(product) is CloudSyncResult.Success
+    }
 
-        var sdkDeleted = false
+    suspend fun deleteProductFromFirestoreWithResult(
+        product: com.example.data.local.entities.ProductEntity
+    ): CloudSyncResult<Unit> = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) {
+            return@withContext CloudSyncResult.Failure("SYNC_DISABLED", "Cloud sync is disabled.")
+        }
+        if (currentUidOrNull() == null) {
+            return@withContext CloudSyncResult.Failure(
+                "UNAUTHENTICATED",
+                "Please sign in with Mobile OTP to delete products from Firestore.",
+                isAuthOrPermissionError = true
+            )
+        }
+
         val docId = "prod_${product.id}"
-
-        // Tier 1: Firebase SDK
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS).document(docId).delete()
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkDeleted = true
-            } catch (_: Exception) {
-                sdkDeleted = true
-            }
-        } catch (_: Throwable) { }
-
-        // Tier 2: REST DELETE
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "DELETE"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
-        } catch (_: Throwable) { }
-
-        sdkDeleted
+        return@withContext try {
+            val firestore = firestoreOrNull()
+                ?: return@withContext CloudSyncResult.Failure("NOT_INITIALIZED", "Firebase Firestore is not initialized on this device.")
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS).document(docId).delete(),
+                10,
+                TimeUnit.SECONDS
+            )
+            CloudSyncResult.Success(Unit)
+        } catch (e: Throwable) {
+            val msg = handleFirestoreError(e, OperationType.DELETE, "${FirebaseSyncConfig.COLLECTION_PRODUCTS}/$docId")
+            CloudSyncResult.Failure(
+                errorCode = if (isAuthOrPermException(e)) "PERMISSION_DENIED" else "DELETE_FAILED",
+                userMessage = msg,
+                isAuthOrPermissionError = isAuthOrPermException(e)
+            )
+        }
     }
 
     /**
@@ -1191,6 +1474,7 @@ object FirestoreSyncService {
             val isAvailable = getAnyBoolean(doc, "isAvailable", true)
             val imageUrl = getAnyString(doc, "imageUrl", "hero_local_mart").ifBlank { "hero_local_mart" }
             val isApproved = getAnyBoolean(doc, "isApproved", true)
+            val ownerUid = getAnyString(doc, "ownerUid")
 
             com.example.data.local.entities.ProductEntity(
                 id = id,
@@ -1204,7 +1488,8 @@ object FirestoreSyncService {
                 stock = stock,
                 isAvailable = isAvailable,
                 imageUrl = imageUrl,
-                isApproved = isApproved
+                isApproved = isApproved,
+                ownerUid = ownerUid
             )
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to parse Firestore product doc: ${e.message}")
@@ -1234,6 +1519,7 @@ object FirestoreSyncService {
             val isAvailable = getFieldBoolean(fields, "isAvailable", true)
             val imageUrl = getFieldString(fields, "imageUrl", "hero_local_mart").ifBlank { "hero_local_mart" }
             val isApproved = getFieldBoolean(fields, "isApproved", true)
+            val ownerUid = getFieldString(fields, "ownerUid")
 
             com.example.data.local.entities.ProductEntity(
                 id = id,
@@ -1247,7 +1533,8 @@ object FirestoreSyncService {
                 stock = stock,
                 isAvailable = isAvailable,
                 imageUrl = imageUrl,
-                isApproved = isApproved
+                isApproved = isApproved,
+                ownerUid = ownerUid
             )
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to parse Firestore product JSON: ${e.message}")
@@ -1257,212 +1544,361 @@ object FirestoreSyncService {
 
     fun fetchCloudShopsInternal(): List<com.example.data.local.entities.ShopEntity> {
         val result = mutableListOf<com.example.data.local.entities.ShopEntity>()
+        val firestore = firestoreOrNull() ?: return result
 
-        // Tier 1: Try Firebase SDK
+        // 1. Public approved shops (matches firestore.rules allow list)
         try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).get()
-            val snapshot = Tasks.await(task, 4, TimeUnit.SECONDS)
-            if (snapshot != null) {
-                for (doc in snapshot.documents) {
-                    val parsed = firestoreDocToShop(doc)
-                    if (parsed != null) {
-                        result.removeAll { it.id == parsed.id || (it.phone.isNotBlank() && it.phone == parsed.phone) }
-                        result.add(parsed)
-                    }
+            val snapshot = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                    .whereEqualTo("isApproved", true)
+                    .get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            for (doc in snapshot.documents) {
+                val parsed = firestoreDocToShop(doc)
+                if (parsed != null) {
+                    result.removeAll { it.id == parsed.id }
+                    result.add(parsed)
                 }
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore SDK shops query: ${e.message}")
+            handleFirestoreError(e, OperationType.LIST, FirebaseSyncConfig.COLLECTION_SHOPS)
         }
 
-        // Cache fallback
-        try {
-            val cacheTask = FirebaseFirestore.getInstance()
-                .collection(FirebaseSyncConfig.COLLECTION_SHOPS)
-                .get(com.google.firebase.firestore.Source.CACHE)
-            val cacheSnapshot = Tasks.await(cacheTask, 2, TimeUnit.SECONDS)
-            if (cacheSnapshot != null) {
-                for (doc in cacheSnapshot.documents) {
+        // 2. If signed in, also fetch caller's own shops (including unapproved)
+        val uid = currentUidOrNull()
+        if (uid != null) {
+            try {
+                val ownSnapshot = Tasks.await(
+                    firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                        .whereEqualTo("ownerUid", uid)
+                        .get(),
+                    6,
+                    TimeUnit.SECONDS
+                )
+                for (doc in ownSnapshot.documents) {
                     val parsed = firestoreDocToShop(doc)
                     if (parsed != null) {
-                        result.removeAll { it.id == parsed.id || (it.phone.isNotBlank() && it.phone == parsed.phone) }
+                        result.removeAll { it.id == parsed.id }
                         result.add(parsed)
                     }
                 }
+            } catch (e: Throwable) {
+                handleFirestoreError(e, OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_SHOPS}?ownerUid")
             }
-        } catch (_: Throwable) { }
-
-        // Tier 2: Try Firestore REST
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_SHOPS}?pageSize=100$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            val code = conn.responseCode
-            if (code in 200..299) {
-                val responseStr = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-                val json = JSONObject(responseStr)
-                val documents = json.optJSONArray("documents")
-                if (documents != null) {
-                    for (i in 0 until documents.length()) {
-                        val doc = documents.optJSONObject(i)
-                        if (doc != null) {
-                            val parsed = firestorePayloadToShop(doc)
-                            if (parsed != null) {
-                                result.removeAll { it.id == parsed.id || (it.phone.isNotBlank() && it.phone == parsed.phone) }
-                                result.add(parsed)
-                            }
-                        }
-                    }
-                }
-            }
-            conn.disconnect()
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST shops query: ${e.message}")
         }
         return result
     }
 
     fun fetchCloudProductsInternal(): List<com.example.data.local.entities.ProductEntity> {
         val result = mutableListOf<com.example.data.local.entities.ProductEntity>()
+        val firestore = firestoreOrNull() ?: return result
 
-        // Tier 1: Try Firebase SDK
+        // 1. Public active & approved products (matches firestore.rules allow list)
         try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS).get()
-            val snapshot = Tasks.await(task, 4, TimeUnit.SECONDS)
-            if (snapshot != null) {
-                for (doc in snapshot.documents) {
-                    val parsed = firestoreDocToProduct(doc)
-                    if (parsed != null) {
-                        result.removeAll { it.id == parsed.id }
-                        result.add(parsed)
-                    }
+            val snapshot = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                    .whereEqualTo("isApproved", true)
+                    .whereEqualTo("isAvailable", true)
+                    .get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            for (doc in snapshot.documents) {
+                val parsed = firestoreDocToProduct(doc)
+                if (parsed != null) {
+                    result.removeAll { it.id == parsed.id }
+                    result.add(parsed)
                 }
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore SDK products query: ${e.message}")
+            handleFirestoreError(e, OperationType.LIST, FirebaseSyncConfig.COLLECTION_PRODUCTS)
         }
 
-        // Cache fallback
-        try {
-            val cacheTask = FirebaseFirestore.getInstance()
-                .collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
-                .get(com.google.firebase.firestore.Source.CACHE)
-            val cacheSnapshot = Tasks.await(cacheTask, 2, TimeUnit.SECONDS)
-            if (cacheSnapshot != null) {
-                for (doc in cacheSnapshot.documents) {
+        // 2. If signed in, also fetch caller's own products (including out-of-stock / unapproved)
+        val uid = currentUidOrNull()
+        if (uid != null) {
+            try {
+                val ownSnapshot = Tasks.await(
+                    firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                        .whereEqualTo("ownerUid", uid)
+                        .get(),
+                    6,
+                    TimeUnit.SECONDS
+                )
+                for (doc in ownSnapshot.documents) {
                     val parsed = firestoreDocToProduct(doc)
                     if (parsed != null) {
                         result.removeAll { it.id == parsed.id }
                         result.add(parsed)
                     }
                 }
+            } catch (e: Throwable) {
+                handleFirestoreError(e, OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_PRODUCTS}?ownerUid")
             }
-        } catch (_: Throwable) { }
-
-        // Tier 2: Try Firestore REST
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_PRODUCTS}?pageSize=300$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            val code = conn.responseCode
-            if (code in 200..299) {
-                val responseStr = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-                val json = JSONObject(responseStr)
-                val documents = json.optJSONArray("documents")
-                if (documents != null) {
-                    for (i in 0 until documents.length()) {
-                        val doc = documents.optJSONObject(i)
-                        if (doc != null) {
-                            val parsed = firestorePayloadToProduct(doc)
-                            if (parsed != null) {
-                                result.removeAll { it.id == parsed.id }
-                                result.add(parsed)
-                            }
-                        }
-                    }
-                }
-            }
-            conn.disconnect()
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST products query: ${e.message}")
         }
         return result
     }
 
     /**
-     * Bidirectional live sync for Shops and Products across all devices:
-     * 1. Fetches cloud shops and products and merges into local SQLite Room database.
-     * 2. Pushes local shops and products not yet in the cloud up to Firestore so all mobiles display them.
+     * Fetches user profile stored at /users/{uid} for multi-device login restoration.
      */
-    suspend fun performShopAndProductCloudSync(dao: MartDao): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    suspend fun fetchUserByUidFromFirestore(uid: String): com.example.data.local.entities.UserEntity? = withContext(Dispatchers.IO) {
+        if (uid.isBlank()) return@withContext null
+        val firestore = firestoreOrNull() ?: return@withContext null
+        return@withContext try {
+            val doc = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(uid).get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            if (!doc.exists()) return@withContext null
+            val name = getAnyString(doc, "name")
+            val phone = getAnyString(doc, "phone")
+            val email = getAnyString(doc, "email")
+            val roleStr = getAnyString(doc, "role", UserRole.CUSTOMER.name)
+            val role = try { UserRole.valueOf(roleStr) } catch (_: Throwable) { UserRole.CUSTOMER }
+            val shopIdRaw = getAnyLong(doc, "shopId", 0L)
+            com.example.data.local.entities.UserEntity(
+                id = getAnyLong(doc, "id", 0L),
+                name = name.ifBlank { "Sinapali User" },
+                phone = phone,
+                email = email,
+                role = role,
+                shopId = if (shopIdRaw > 0L) shopIdRaw else null,
+                isVerified = getAnyBoolean(doc, "isVerified", true),
+                district = getAnyString(doc, "district", "Nuapada"),
+                block = getAnyString(doc, "block", "Sinapali"),
+                gp = getAnyString(doc, "gp", "Sinapali"),
+                village = getAnyString(doc, "village", "Sinapali"),
+                deliveryAddress = getAnyString(doc, "deliveryAddress", "Sinapali"),
+                firebaseUid = uid
+            )
+        } catch (e: Throwable) {
+            handleFirestoreError(e, OperationType.GET, "${FirebaseSyncConfig.COLLECTION_USERS}/$uid")
+            null
+        }
+    }
+
+    /**
+     * Fetches shop owned by the authenticated Firebase UID from Firestore.
+     */
+    suspend fun fetchShopByOwnerUidFromFirestore(uid: String): com.example.data.local.entities.ShopEntity? = withContext(Dispatchers.IO) {
+        if (uid.isBlank()) return@withContext null
+        val firestore = firestoreOrNull() ?: return@withContext null
+        return@withContext try {
+            val snapshot = Tasks.await(
+                firestore
+                    .collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                    .whereEqualTo("ownerUid", uid)
+                    .limit(1)
+                    .get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            snapshot.documents.firstOrNull()?.let { firestoreDocToShop(it) }
+        } catch (e: Throwable) {
+            handleFirestoreError(e, OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_SHOPS}?ownerUid")
+            null
+        }
+    }
+
+    /**
+     * Bidirectional live sync for Shops and Products across all devices:
+     * 1. Pulls published shops and active products (plus signed-in owner's items) from Firestore into Room.
+     * 2. Only pushes local shops/products owned by the currently authenticated Firebase user UID (never backfills SeedData).
+     */
+    suspend fun performShopAndProductCloudSync(dao: MartDao): Pair<Int, Int> {
+        val report = performShopAndProductCloudSyncWithResult(dao)
+        return Pair(report.syncedShopsCount, report.syncedProductsCount)
+    }
+
+    suspend fun performShopAndProductCloudSyncWithResult(dao: MartDao): ShopAndProductSyncReport = withContext(Dispatchers.IO) {
         var shopCount = 0
         var prodCount = 0
+        var syncError: String? = null
+        var isAuthErr = false
+        val firestore = firestoreOrNull() ?: return@withContext ShopAndProductSyncReport(
+            success = false,
+            syncedShopsCount = 0,
+            syncedProductsCount = 0,
+            errorMessage = "Firebase Firestore is not initialized on this device.",
+            isAuthOrPermissionError = false
+        )
+        val currentUid = currentUidOrNull()
 
-        // 1. Fetch remote shops from Firestore
-        val cloudShops = fetchCloudShopsInternal()
-        val localShops = dao.getAllShops().first()
-
-        for (remoteShop in cloudShops) {
-            dao.insertShop(remoteShop)
-            shopCount++
+        val cloudShops = mutableListOf<com.example.data.local.entities.ShopEntity>()
+        try {
+            val publicShopsSnap = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                    .whereEqualTo("isApproved", true)
+                    .get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            for (doc in publicShopsSnap.documents) {
+                firestoreDocToShop(doc)?.let { cloudShops.add(it) }
+            }
+            if (currentUid != null) {
+                val ownShopsSnap = Tasks.await(
+                    firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS)
+                        .whereEqualTo("ownerUid", currentUid)
+                        .get(),
+                    6,
+                    TimeUnit.SECONDS
+                )
+                for (doc in ownShopsSnap.documents) {
+                    firestoreDocToShop(doc)?.let { s ->
+                        cloudShops.removeAll { it.id == s.id }
+                        cloudShops.add(s)
+                    }
+                }
+            }
+            for (remoteShop in cloudShops) {
+                dao.insertShop(remoteShop)
+                shopCount++
+            }
+        } catch (e: Throwable) {
+            syncError = handleFirestoreError(e, OperationType.LIST, FirebaseSyncConfig.COLLECTION_SHOPS)
+            isAuthErr = isAuthOrPermException(e)
         }
 
-        // Backfill any local shops not in cloud up to Firestore
-        for (localShop in localShops) {
-            if (cloudShops.none { it.id == localShop.id || (it.phone.isNotBlank() && it.phone == localShop.phone) }) {
-                pushShopToFirestore(localShop)
+        // Only push local shops owned by the current authenticated Firebase user
+        if (currentUid != null) {
+            val localShops = dao.getAllShopsSync()
+            for (localShop in localShops) {
+                if (localShop.ownerUid == currentUid && cloudShops.none { it.id == localShop.id }) {
+                    when (val pushRes = pushShopToFirestoreWithResult(localShop, isNew = true)) {
+                        is CloudSyncResult.Failure -> {
+                            Log.e(TAG, "Backfill shop push failed (shopId=${localShop.id}, uid=$currentUid): ${pushRes.errorCode} - ${pushRes.userMessage}")
+                            if (syncError == null) {
+                                syncError = pushRes.userMessage
+                                isAuthErr = pushRes.isAuthOrPermissionError
+                            }
+                        }
+                        is CloudSyncResult.Success -> Unit
+                    }
+                }
             }
         }
 
-        // 2. Fetch remote products from Firestore
-        val cloudProducts = fetchCloudProductsInternal()
-        val localProducts = dao.getAllProducts().first()
-
-        for (remoteProduct in cloudProducts) {
-            dao.insertProduct(remoteProduct)
-            prodCount++
+        val cloudProducts = mutableListOf<com.example.data.local.entities.ProductEntity>()
+        var publicProdsFetched = false
+        try {
+            val publicProdsSnap = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                    .whereEqualTo("isApproved", true)
+                    .whereEqualTo("isAvailable", true)
+                    .get(),
+                8,
+                TimeUnit.SECONDS
+            )
+            publicProdsFetched = true
+            for (doc in publicProdsSnap.documents) {
+                firestoreDocToProduct(doc)?.let { cloudProducts.add(it) }
+            }
+            if (currentUid != null) {
+                val ownProdsSnap = Tasks.await(
+                    firestore.collection(FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                        .whereEqualTo("ownerUid", currentUid)
+                        .get(),
+                    6,
+                    TimeUnit.SECONDS
+                )
+                for (doc in ownProdsSnap.documents) {
+                    firestoreDocToProduct(doc)?.let { p ->
+                        cloudProducts.removeAll { it.id == p.id }
+                        cloudProducts.add(p)
+                    }
+                }
+            }
+            for (remoteProduct in cloudProducts) {
+                dao.insertProduct(remoteProduct)
+                prodCount++
+            }
+            if (publicProdsFetched) {
+                val remoteIds = cloudProducts.map { it.id }.toSet()
+                val localProducts = dao.getAllProductsSync()
+                for (localProd in localProducts) {
+                    if (localProd.ownerUid.isNotBlank() &&
+                        localProd.ownerUid != currentUid &&
+                        !remoteIds.contains(localProd.id)
+                    ) {
+                        dao.deleteProduct(localProd)
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            if (syncError == null) {
+                syncError = handleFirestoreError(e, OperationType.LIST, FirebaseSyncConfig.COLLECTION_PRODUCTS)
+                isAuthErr = isAuthOrPermException(e)
+            }
         }
 
-        // Backfill any local products not in cloud up to Firestore
-        for (localProduct in localProducts) {
-            if (cloudProducts.none { it.id == localProduct.id }) {
-                pushProductToFirestore(localProduct)
+        // Only push local products owned by the current authenticated Firebase user
+        if (currentUid != null) {
+            val localProducts = dao.getAllProductsSync()
+            for (localProduct in localProducts) {
+                if (localProduct.ownerUid == currentUid && cloudProducts.none { it.id == localProduct.id }) {
+                    when (val pushRes = pushProductToFirestoreWithResult(localProduct, isNew = true)) {
+                        is CloudSyncResult.Failure -> {
+                            Log.e(
+                                TAG,
+                                "Backfill product push failed (productId=${localProduct.id}, shopId=${localProduct.shopId}, uid=$currentUid): ${pushRes.errorCode} - ${pushRes.userMessage}"
+                            )
+                            if (syncError == null) {
+                                syncError = pushRes.userMessage
+                                isAuthErr = pushRes.isAuthOrPermissionError
+                            }
+                        }
+                        is CloudSyncResult.Success -> Unit
+                    }
+                }
             }
         }
 
         Log.i(TAG, "Shop & Product Cloud Sync complete. Synced $shopCount shops, $prodCount products.")
-        Pair(shopCount, prodCount)
+        ShopAndProductSyncReport(
+            success = syncError == null,
+            syncedShopsCount = shopCount,
+            syncedProductsCount = prodCount,
+            errorMessage = syncError,
+            isAuthOrPermissionError = isAuthErr
+        )
     }
 
     /**
-     * Saves a user account to Firebase Firestore.
+     * Saves an authenticated user account to /users/{uid} in Firebase Firestore.
      */
-    suspend fun pushUserToFirestore(user: com.example.data.local.entities.UserEntity): Boolean = withContext(Dispatchers.IO) {
-        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) return@withContext false
+    suspend fun pushUserToFirestore(user: com.example.data.local.entities.UserEntity): Boolean {
+        return pushUserToFirestoreWithResult(user) is CloudSyncResult.Success
+    }
 
-        val docId = if (user.phone.isNotBlank()) "user_${user.phone.trim()}" else "user_${user.id}"
+    suspend fun pushUserToFirestoreWithResult(
+        user: com.example.data.local.entities.UserEntity
+    ): CloudSyncResult<Unit> = withContext(Dispatchers.IO) {
+        if (!FirebaseSyncConfig.IS_LIVE_CLOUD_SYNC_ACTIVE) {
+            return@withContext CloudSyncResult.Failure("SYNC_DISABLED", "Cloud sync is disabled.")
+        }
+
+        val uid = user.firebaseUid.ifBlank { currentUidOrNull() ?: "" }
+        if (uid.isBlank()) {
+            return@withContext CloudSyncResult.Failure(
+                "UNAUTHENTICATED",
+                "Please sign in with Mobile OTP to save your profile to Firestore.",
+                isAuthOrPermissionError = true
+            )
+        }
+
+        val safeRole = if (user.role == UserRole.SHOP_OWNER) UserRole.SHOP_OWNER.name else UserRole.CUSTOMER.name
         val map = mutableMapOf<String, Any>(
+            "uid" to uid,
             "id" to user.id,
             "name" to user.name,
             "phone" to user.phone,
             "email" to user.email,
-            "role" to user.role.name,
+            "role" to safeRole,
             "shopId" to (user.shopId ?: 0L),
             "isVerified" to user.isVerified,
             "deliveryAddress" to user.deliveryAddress,
@@ -1471,144 +1907,63 @@ object FirestoreSyncService {
             "updatedAt" to System.currentTimeMillis()
         )
 
-        var sdkSaved = false
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(docId).set(map)
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkSaved = true
-            } catch (_: Exception) {
-                sdkSaved = true
-            }
-            Log.i(TAG, "User '${user.name}' (${user.role.name}) pushed via Firebase SDK")
+        return@withContext try {
+            val firestore = firestoreOrNull()
+                ?: return@withContext CloudSyncResult.Failure("NOT_INITIALIZED", "Firebase Firestore is not initialized on this device.")
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(uid).set(map),
+                10,
+                TimeUnit.SECONDS
+            )
+            Log.i(TAG, "User '${user.name}' ($safeRole) pushed via Firebase SDK")
+            CloudSyncResult.Success(Unit)
         } catch (e: Throwable) {
-            Log.w(TAG, "Firebase SDK user push notice: ${e.message}")
+            val msg = handleFirestoreError(e, OperationType.WRITE, "${FirebaseSyncConfig.COLLECTION_USERS}/$uid")
+            CloudSyncResult.Failure(
+                errorCode = if (isAuthOrPermException(e)) "PERMISSION_DENIED" else "WRITE_FAILED",
+                userMessage = msg,
+                isAuthOrPermissionError = isAuthOrPermException(e)
+            )
         }
-
-        // Tier 2: REST fallback for guaranteed persistence
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_USERS}/$docId$keyParam"
-            val fields = JSONObject()
-            fields.put("name", JSONObject().put("stringValue", user.name))
-            fields.put("phone", JSONObject().put("stringValue", user.phone))
-            fields.put("email", JSONObject().put("stringValue", user.email))
-            fields.put("role", JSONObject().put("stringValue", user.role.name))
-            fields.put("shopId", JSONObject().put("integerValue", (user.shopId ?: 0L).toString()))
-            fields.put("isVerified", JSONObject().put("booleanValue", user.isVerified))
-            fields.put("deliveryAddress", JSONObject().put("stringValue", user.deliveryAddress))
-            fields.put("district", JSONObject().put("stringValue", user.district))
-            fields.put("block", JSONObject().put("stringValue", user.block))
-            val payload = JSONObject().put("fields", fields)
-
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "PATCH"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
-            }
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST user push: ${e.message}")
-        }
-
-        sdkSaved
     }
 
     /**
-     * Permanently deletes a User record from Firestore cloud collections across all tiers.
-     * Compliant with Google Play Store User Data Deletion Policy and GDPR.
+     * Permanently deletes the authenticated user record from /users/{uid} in Firestore.
      */
     suspend fun deleteUserFromFirestore(userId: Long): Boolean = withContext(Dispatchers.IO) {
-        val docId = "user_$userId"
-        var sdkDeleted = false
-
-        // Tier 1: Firebase Firestore SDK
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(docId).delete()
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkDeleted = true
-            } catch (_: Exception) {
-                sdkDeleted = true
-            }
-            Log.i(TAG, "User $userId deleted from Firestore SDK")
+        val uid = currentUidOrNull() ?: return@withContext false
+        val firestore = firestoreOrNull() ?: return@withContext false
+        return@withContext try {
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_USERS).document(uid).delete(),
+                8,
+                TimeUnit.SECONDS
+            )
+            true
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firebase SDK user delete: ${e.message}")
+            handleFirestoreError(e, OperationType.DELETE, "${FirebaseSyncConfig.COLLECTION_USERS}/$uid")
+            false
         }
-
-        // Tier 2: REST DELETE
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_USERS}/$docId$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "DELETE"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST user delete: ${e.message}")
-        }
-
-        sdkDeleted
     }
 
     /**
-     * Permanently deletes a Shop and its products from Firestore cloud collections.
+     * Permanently deletes a Shop from Firestore (only succeeds if caller owns it).
      */
     suspend fun deleteShopFromFirestore(shopId: Long): Boolean = withContext(Dispatchers.IO) {
+        if (currentUidOrNull() == null) return@withContext false
+        val firestore = firestoreOrNull() ?: return@withContext false
         val docId = "shop_$shopId"
-        var sdkDeleted = false
-
-        // Tier 1: Firebase SDK
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).document(docId).delete()
-            try {
-                Tasks.await(task, 4, TimeUnit.SECONDS)
-                sdkDeleted = true
-            } catch (_: Exception) {
-                sdkDeleted = true
-            }
-            Log.i(TAG, "Shop $shopId deleted from Firestore SDK")
+        return@withContext try {
+            Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_SHOPS).document(docId).delete(),
+                8,
+                TimeUnit.SECONDS
+            )
+            true
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firebase SDK shop delete: ${e.message}")
+            handleFirestoreError(e, OperationType.DELETE, "${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId")
+            false
         }
-
-        // Tier 2: REST DELETE
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "?key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_SHOPS}/$docId$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "DELETE"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) return@withContext true
-        } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore REST shop delete: ${e.message}")
-        }
-
-        sdkDeleted
     }
 
     /**
@@ -1653,13 +2008,16 @@ object FirestoreSyncService {
             }
         }
 
-        // 2. Upload any local orders that might not be in cloud
-        for (local in localOrders) {
-            val isRemote = cloudOrders.any { it.first.orderNumber == local.orderNumber }
-            if (!isRemote) {
-                val items = dao.getOrderItems(local.id).first()
-                val pushed = pushOrderToFirestore(local, items)
-                if (pushed) uploadedCount++
+        // 2. Upload local orders belonging to the authenticated user that might not be in cloud
+        val currentUid = currentUidOrNull()
+        if (currentUid != null) {
+            for (local in localOrders) {
+                val isRemote = cloudOrders.any { it.first.orderNumber == local.orderNumber }
+                if (!isRemote && local.customerUid == currentUid) {
+                    val items = dao.getOrderItems(local.id).first()
+                    val pushed = pushOrderToFirestore(local, items)
+                    if (pushed) uploadedCount++
+                }
             }
         }
 
@@ -1755,76 +2113,46 @@ object FirestoreSyncService {
 
     fun fetchCloudOrdersInternal(): List<Pair<OrderEntity, List<OrderItemEntity>>> {
         val result = mutableListOf<Pair<OrderEntity, List<OrderItemEntity>>>()
+        val uid = currentUidOrNull() ?: return result
+        val firestore = firestoreOrNull() ?: return result
 
-        // Tier 1: Try Firebase SDK (Server first)
+        // Scoped queries matching firestore.rules: customerUid == uid OR shopOwnerUid == uid
         try {
-            val firestore = FirebaseFirestore.getInstance()
-            val task = firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS).get()
-            val snapshot = Tasks.await(task, 4, TimeUnit.SECONDS)
-            if (snapshot != null) {
-                for (doc in snapshot.documents) {
-                    val parsed = firestoreDocToOrder(doc)
-                    if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
-                        result.add(parsed)
-                    }
-                }
-                if (result.isNotEmpty()) {
-                    Log.i(TAG, "Fetched ${result.size} orders via Firebase SDK")
+            val customerSnap = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .whereEqualTo("customerUid", uid)
+                    .get(),
+                6,
+                TimeUnit.SECONDS
+            )
+            for (doc in customerSnap.documents) {
+                val parsed = firestoreDocToOrder(doc)
+                if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
+                    result.add(parsed)
                 }
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore SDK query: ${e.message}")
+            handleFirestoreError(e, OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_ORDERS}?customerUid")
         }
 
-        // Always check local Firestore persistence cache to include offline-queued or cached orders
         try {
-            val cacheTask = FirebaseFirestore.getInstance()
-                .collection(FirebaseSyncConfig.COLLECTION_ORDERS)
-                .get(com.google.firebase.firestore.Source.CACHE)
-            val cacheSnapshot = Tasks.await(cacheTask, 2, TimeUnit.SECONDS)
-            if (cacheSnapshot != null) {
-                for (doc in cacheSnapshot.documents) {
-                    val parsed = firestoreDocToOrder(doc)
-                    if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
-                        result.add(parsed)
-                    }
+            val ownerSnap = Tasks.await(
+                firestore.collection(FirebaseSyncConfig.COLLECTION_ORDERS)
+                    .whereEqualTo("shopOwnerUid", uid)
+                    .get(),
+                6,
+                TimeUnit.SECONDS
+            )
+            for (doc in ownerSnap.documents) {
+                val parsed = firestoreDocToOrder(doc)
+                if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
+                    result.add(parsed)
                 }
             }
-        } catch (_: Throwable) { }
-
-        // Tier 2: Try Firestore REST with pageSize=300
-        try {
-            val keyParam = if (FirebaseSyncConfig.FIREBASE_API_KEY.isNotBlank()) "&key=${FirebaseSyncConfig.FIREBASE_API_KEY}" else ""
-            val urlString = "${FirebaseSyncConfig.FIRESTORE_BASE_URL}/${FirebaseSyncConfig.COLLECTION_ORDERS}?pageSize=300$keyParam"
-            val url = URL(urlString)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.setRequestProperty("X-Android-Package", FirebaseSyncConfig.APPLICATION_PACKAGE_NAME)
-            conn.setRequestProperty("X-Android-Cert", "2CDB7DA79A8BDCB1CFD2770FB9BF3162AEA3FAEA")
-
-            val code = conn.responseCode
-            if (code in 200..299) {
-                val responseStr = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-                val json = JSONObject(responseStr)
-                val documents = json.optJSONArray("documents")
-                if (documents != null) {
-                    for (i in 0 until documents.length()) {
-                        val doc = documents.optJSONObject(i)
-                        if (doc != null) {
-                            val parsed = firestorePayloadToOrder(doc)
-                            if (parsed != null && result.none { it.first.orderNumber == parsed.first.orderNumber }) {
-                                result.add(parsed)
-                            }
-                        }
-                    }
-                }
-            }
-            conn.disconnect()
         } catch (e: Throwable) {
-            Log.w(TAG, "Notice: Firestore documents query: ${e.message}")
+            handleFirestoreError(e, OperationType.LIST, "${FirebaseSyncConfig.COLLECTION_ORDERS}?shopOwnerUid")
         }
+
         return result
     }
 }

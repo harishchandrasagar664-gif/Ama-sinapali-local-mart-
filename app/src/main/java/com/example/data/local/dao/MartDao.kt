@@ -72,6 +72,9 @@ interface MartDao {
     @Query("SELECT * FROM shops")
     fun getAllShops(): Flow<List<ShopEntity>>
 
+    @Query("SELECT * FROM shops")
+    suspend fun getAllShopsSync(): List<ShopEntity>
+
     @Query("SELECT * FROM shops WHERE id = :id")
     fun getShopById(id: Long): Flow<ShopEntity?>
 
@@ -99,6 +102,9 @@ interface MartDao {
 
     @Query("SELECT * FROM products")
     fun getAllProducts(): Flow<List<ProductEntity>>
+
+    @Query("SELECT * FROM products")
+    suspend fun getAllProductsSync(): List<ProductEntity>
 
     @Query("SELECT * FROM products WHERE shopId = :shopId")
     fun getProductsByShop(shopId: Long): Flow<List<ProductEntity>>
